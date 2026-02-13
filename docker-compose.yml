@@ -1,0 +1,31 @@
+version: "3.9"
+services:
+  mongo:
+    image: mongo:6
+    restart: unless-stopped
+    ports: ["27017:27017"]
+    volumes:
+      - mongo_data:/data/db
+  api:
+    build: ./apps/api
+    depends_on: [mongo]
+    environment:
+      - PORT=4000
+      - MONGODB_URI=mongodb://mongo:27017/mil_evidenca
+      - JWT_SECRET=${JWT_SECRET}
+      - CORS_ORIGIN=http://localhost:5173
+      - TOTP_ISSUER=MilEvidenca
+    ports: ["4000:4000"]
+    command: ["pnpm","dev"]
+    volumes:
+      - ./apps/api:/app
+  web:
+    build: ./apps/web
+    environment:
+      - VITE_API_URL=http://localhost:4000/api
+    ports: ["5173:5173"]
+    command: ["pnpm","dev","--host"]
+    volumes:
+      - ./apps/web:/app
+volumes:
+  mongo_data:
