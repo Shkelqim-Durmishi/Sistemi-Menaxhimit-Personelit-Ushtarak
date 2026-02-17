@@ -1,8 +1,12 @@
 // src/App.tsx
+
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
-import { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
 import { getRole, getCurrentUser, logout, searchPeople } from './lib/api';
+
+// ✅ vendose logon këtu (ndrysho path sipas projektit tond)
+import FSKLogo from './assets/fsk-logo.png';
 
 // Icons
 import {
@@ -20,6 +24,9 @@ import {
   HiX,
   HiUserCircle,
   HiKey,
+  HiChevronLeft,
+  HiChevronRight,
+  HiMenu,
 } from 'react-icons/hi';
 
 type SuggestItem = {
@@ -36,12 +43,27 @@ function formatRole(role?: string | null) {
   return String(role).replaceAll('_', ' ').toUpperCase();
 }
 
+// ✅ hook i lehtë për breakpoint (mobile)
+function useIsMobile(breakpointPx = 900) {
+  const [isMobile, setIsMobile] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return window.innerWidth < breakpointPx;
+  });
+
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < breakpointPx);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [breakpointPx]);
+
+  return isMobile;
+}
+
 export default function App() {
   const loc = useLocation();
   const navigate = useNavigate();
 
   const role = getRole();
-
   const isAdmin = role === 'ADMIN';
   const isCommander = role === 'COMMANDER';
   const isOfficer = role === 'OFFICER';
@@ -55,14 +77,50 @@ export default function App() {
   const canSeeRequests = isAdmin || isAuditor || isCommander || isOfficer || isOperator;
   const canSeeVehiclesLive = isAdmin || isCommander;
 
+  const canUseSearch = canSeePeople;
+
+  // ✅ Mobile drawer
+  const isMobile = useIsMobile(900);
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  // ✅ Desktop collapse (ruaje në localStorage)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('sm_sidebar_collapsed') === '1';
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('sm_sidebar_collapsed', sidebarCollapsed ? '1' : '0');
+    } catch {
+      // ignore
+    }
+  }, [sidebarCollapsed]);
+
+  // ✅ kur ndryshon route në mobile, mbylle drawer-in
+  useEffect(() => {
+    if (isMobile) setMobileOpen(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loc.pathname, isMobile]);
+
+  // ✅ ESC mbyll drawer-in
+  useEffect(() => {
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMobileOpen(false);
+    };
+    window.addEventListener('keydown', onEsc);
+    return () => window.removeEventListener('keydown', onEsc);
+  }, []);
+
   // 🔎 Search (live)
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(false);
   const [loadingSug, setLoadingSug] = useState(false);
   const [sug, setSug] = useState<SuggestItem[]>([]);
   const boxRef = useRef<HTMLDivElement | null>(null);
-
-  const canUseSearch = canSeePeople;
 
   // Close search dropdown on outside click
   useEffect(() => {
@@ -110,45 +168,102 @@ export default function App() {
 
   const placeholder = canUseSearch ? 'Kërko ushtar… (emër, mbiemër, nr. shërbimi)' : 'Search…';
 
-  return (
-    <div className="min-h-screen grid grid-cols-[260px_1fr] bg-[#f3f5f8]">
-      {/* SIDEBAR */}
-      <aside className="bg-white/80 backdrop-blur border-r border-gray-200 flex flex-col">
-        {/* Top brand */}
-        <div className="px-5 pt-5 pb-4">
-          <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-[#2F3E2E] to-[#C9A24D] shadow-sm" />
-            <div className="leading-tight">
-              <div className="text-sm tracking-wide text-gray-500">SMPU</div>
-              <div className="text-base font-semibold text-gray-900">Paneli</div>
-            </div>
+  // ✅ Sidebar width rules
+  const desktopSidebarWidth = sidebarCollapsed ? 'w-[88px]' : 'w-[280px]';
+
+  // ✅ Sidebar component (përdoret për desktop dhe mobile drawer)
+  const Sidebar = ({
+    collapsed,
+    showDesktopHandle,
+    onToggleCollapse,
+  }: {
+    collapsed: boolean;
+    showDesktopHandle: boolean;
+    onToggleCollapse: () => void;
+  }) => {
+    return (
+      <aside
+        className={[
+          'relative group',
+          'bg-white/80 backdrop-blur border-r border-gray-200',
+          'h-screen flex flex-col overflow-hidden shrink-0',
+          isMobile ? 'w-[280px]' : desktopSidebarWidth,
+          'transition-[width] duration-200',
+        ].join(' ')}
+      >
+        {/* ✅ TOP: LOGO (klik për hap/mbyll) */}
+        <div className="px-4 pt-4 pb-3">
+          <div className={['flex items-center', collapsed ? 'justify-center' : 'justify-start gap-3'].join(' ')}>
+            {/* ✅ LOGO e FSK-së (qendër kur collapsed) */}
+            <button
+              type="button"
+              onClick={() => {
+                // në mobile mos e përdor këtë për collapse, se mobile ka drawer
+                if (isMobile) return;
+                onToggleCollapse();
+              }}
+              className={[
+                'h-11 w-11 rounded-xl bg-white border border-gray-200 shadow-sm overflow-hidden shrink-0',
+                'flex items-center justify-center',
+                !isMobile ? 'cursor-pointer hover:bg-gray-50' : '',
+              ].join(' ')}
+              title={!isMobile ? (collapsed ? 'Hap navigimin' : 'Mbyll navigimin') : undefined}
+              aria-label={!isMobile ? (collapsed ? 'Hap navigimin' : 'Mbyll navigimin') : undefined}
+            >
+              <img src={FSKLogo} alt="FSK" className="h-9 w-9 object-contain" />
+            </button>
+
+            {!collapsed && (
+              <div className="leading-tight min-w-0">
+                <div className="text-sm tracking-wide text-gray-500 truncate">SISTEMI I MENAXHIMIT</div>
+                <div className="text-base font-semibold text-gray-900 truncate">Paneli</div>
+              </div>
+            )}
           </div>
         </div>
 
-        {/* Navigation */}
-        <nav className="px-3 pb-3">
-          <div className="px-2 mb-2 text-[11px] font-semibold uppercase tracking-wider text-gray-400">Kryesore</div>
+        {/* ✅ DESKTOP: Handle diskret në mes (s’duket si hamburger, del veç kur hover) */}
+        {showDesktopHandle && !isMobile && (
+          <button
+            type="button"
+            onClick={onToggleCollapse}
+            className={[
+              'absolute top-1/2 -translate-y-1/2 right-[-10px]',
+              'h-12 w-6 rounded-full border border-gray-200 bg-white shadow-sm',
+              'flex items-center justify-center',
+              'opacity-0 group-hover:opacity-100 transition-opacity',
+            ].join(' ')}
+            aria-label={collapsed ? 'Hap navigimin' : 'Mbyll navigimin'}
+            title={collapsed ? 'Hap navigimin' : 'Mbyll navigimin'}
+          >
+            {collapsed ? <HiChevronRight className="text-lg text-gray-600" /> : <HiChevronLeft className="text-lg text-gray-600" />}
+          </button>
+        )}
 
-          <NavItem to="/" label="Dashboard" current={loc.pathname === '/'} icon={<HiHome />} />
+        {/* Navigation (scroll vetëm këtu nëse ka shumë itema) */}
+        <nav className="px-2 pb-3 flex-1 overflow-y-auto">
+          {!collapsed && <div className="px-2 mb-2 text-[11px] font-semibold uppercase tracking-wider text-gray-400">Kryesore</div>}
 
-          <NavItem
-            to="/reports"
-            label="Raport Ditor"
-            current={loc.pathname.startsWith('/reports')}
-            icon={<HiDocumentText />}
-          />
+          <NavItem collapsed={collapsed} to="/" label="Dashboard" current={loc.pathname === '/'} icon={<HiHome />} />
+          <NavItem collapsed={collapsed} to="/reports" label="Raport Ditor" current={loc.pathname.startsWith('/reports')} icon={<HiDocumentText />} />
 
           {canSeePeople && (
             <NavItem
+              collapsed={collapsed}
               to="/people"
               label="Ushtarët"
-              current={loc.pathname === '/people' || loc.pathname.startsWith('/people/')}
+              // ✅ FIX: mos e aktivizo kur je te /people/pending
+              current={
+                loc.pathname === '/people' ||
+                (loc.pathname.startsWith('/people/') && !loc.pathname.startsWith('/people/pending'))
+              }
               icon={<HiUsers />}
             />
           )}
 
           {canSeePeoplePending && (
             <NavItem
+              collapsed={collapsed}
               to="/people/pending"
               label="Ushtarët në pritje"
               current={loc.pathname.startsWith('/people/pending')}
@@ -157,18 +272,14 @@ export default function App() {
           )}
 
           {canSeeRequests && (
-            <NavItem
-              to="/requests"
-              label="Kërkesat"
-              current={loc.pathname.startsWith('/requests')}
-              icon={<HiClipboardList />}
-            />
+            <NavItem collapsed={collapsed} to="/requests" label="Kërkesat" current={loc.pathname.startsWith('/requests')} icon={<HiClipboardList />} />
           )}
 
-          <NavItem to="/approvals" label="Miratime" current={loc.pathname.startsWith('/approvals')} icon={<HiCheckCircle />} />
+          <NavItem collapsed={collapsed} to="/approvals" label="Miratime" current={loc.pathname.startsWith('/approvals')} icon={<HiCheckCircle />} />
 
           {canSeeVehiclesLive && (
             <NavItem
+              collapsed={collapsed}
               to="/vehicles-live"
               label="GPS – Veturat (Live)"
               current={loc.pathname.startsWith('/vehicles-live')}
@@ -178,11 +289,11 @@ export default function App() {
 
           {isAdmin && (
             <>
-              <div className="mt-5 px-2 mb-2 text-[11px] font-semibold uppercase tracking-wider text-gray-400">Admin</div>
+              {!collapsed && <div className="mt-5 px-2 mb-2 text-[11px] font-semibold uppercase tracking-wider text-gray-400">Admin</div>}
 
-              <NavItem to="/users" label="Përdoruesit" current={loc.pathname.startsWith('/users')} icon={<HiUserGroup />} />
-
+              <NavItem collapsed={collapsed} to="/users" label="Përdoruesit" current={loc.pathname.startsWith('/users')} icon={<HiUserGroup />} />
               <NavItem
+                collapsed={collapsed}
                 to="/admin/login-audit"
                 label="Login / Logout Logs"
                 current={loc.pathname.startsWith('/admin/login-audit')}
@@ -192,147 +303,182 @@ export default function App() {
           )}
         </nav>
 
-        {/* Bottom user box */}
-        <div className="mt-auto p-4 border-t border-gray-200">
+        {/* ✅ Bottom user box + logout (STATIK) */}
+        <div className="p-4 border-t border-gray-200 shrink-0">
           {user && (
-            <div className="mb-3 rounded-xl bg-white shadow-sm border border-gray-100 p-3">
-              <div className="text-sm font-semibold text-gray-900">{user.username}</div>
-              <div className="mt-0.5 text-[11px] uppercase tracking-wider text-gray-400">{formatRole(user.role)}</div>
-              <div className="mt-2 text-xs text-gray-600">
-                Njësia:{' '}
-                <span className="font-medium">{user.unitId ? user.unitId : '— (ADMIN / pa njësi)'}</span>
-              </div>
+            <div className={['mb-3 rounded-xl bg-white shadow-sm border border-gray-100', collapsed ? 'p-2 flex items-center justify-center' : 'p-3'].join(' ')}>
+              {collapsed ? (
+                <div className="w-10 h-10 rounded-full bg-gray-900 text-white flex items-center justify-center text-sm font-semibold" title={`${user.username} • ${formatRole(user.role)}`}>
+                  {user.username?.slice(0, 1)?.toUpperCase() || 'U'}
+                </div>
+              ) : (
+                <>
+                  <div className="text-sm font-semibold text-gray-900">{user.username}</div>
+                  <div className="mt-0.5 text-[11px] uppercase tracking-wider text-gray-400">{formatRole(user.role)}</div>
+                  <div className="mt-2 text-xs text-gray-600">
+                    Njësia: <span className="font-medium">{user.unitId ? user.unitId : '— (ADMIN / pa njësi)'}</span>
+                  </div>
+                </>
+              )}
             </div>
           )}
 
+          {/* ✅ Logout red */}
           <button
             onClick={async () => {
               await logout();
               navigate('/login', { replace: true });
             }}
-            className="
-              w-full flex items-center justify-center gap-2
-              px-3 py-2 rounded-xl text-sm font-semibold
-              text-white
-              bg-gradient-to-r from-[#2F3E2E] to-[#C9A24D]
-              hover:from-[#263325] hover:to-[#b8953f]
-              shadow-sm hover:shadow
-              transition
-            "
+            className={[
+              'w-full flex items-center justify-center gap-2',
+              collapsed ? 'px-2 py-2' : 'px-3 py-2',
+              'rounded-xl text-sm font-semibold',
+              'text-white bg-red-600 hover:bg-red-700',
+              'shadow-sm hover:shadow transition',
+            ].join(' ')}
+            title="Dil nga sistemi"
           >
             <HiLogout className="text-lg" />
-            Dil nga sistemi
+            {!collapsed && 'Dil nga sistemi'}
           </button>
 
-          <div className="mt-3 text-[11px] text-gray-400 text-center">© 2026 FSK • Sistemi i menaxhimit</div>
+          {!collapsed && <div className="mt-3 text-[11px] text-gray-400 text-center">© 2026 FSK • Sistemi i menaxhimit</div>}
         </div>
       </aside>
+    );
+  };
 
-      {/* MAIN */}
-      <main className="p-6 space-y-6">
-        {/* HEADER (Search + User Menu) */}
-        <div className="flex items-center justify-between gap-4">
-          {/* Search */}
-          <div ref={boxRef} className="relative w-full max-w-2xl">
-            <HiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-lg" />
-            <input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              onFocus={() => q.trim().length >= 2 && setOpen(true)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  if (canUseSearch) goToPeopleSearch(q);
-                }
-                if (e.key === 'Escape') setOpen(false);
-              }}
-              placeholder={placeholder}
-              disabled={!canUseSearch}
-              className="
-                w-full pl-10 pr-10 py-2.5 rounded-xl
-                border border-gray-200 bg-white
-                text-sm text-gray-700
-                shadow-sm
-                focus:outline-none focus:ring-2 focus:ring-[#C9A24D]/40
-                disabled:opacity-60 disabled:cursor-not-allowed
-              "
-            />
+  return (
+    <div className="h-screen w-full bg-[#f3f5f8] overflow-hidden flex">
+      {/* ✅ DESKTOP sidebar (statik) */}
+      {!isMobile && <Sidebar collapsed={sidebarCollapsed} showDesktopHandle={true} onToggleCollapse={() => setSidebarCollapsed((v) => !v)} />}
 
-            {q && (
+      {/* ✅ MOBILE drawer sidebar */}
+      {isMobile && (
+        <>
+          {/* overlay */}
+          {mobileOpen && <div className="fixed inset-0 bg-gray-900/40 z-[9998]" onClick={() => setMobileOpen(false)} aria-hidden="true" />}
+
+          <div className={['fixed top-0 left-0 z-[9999] h-screen', 'transition-transform duration-200', mobileOpen ? 'translate-x-0' : '-translate-x-full'].join(' ')}>
+            <Sidebar collapsed={false} showDesktopHandle={false} onToggleCollapse={() => { }} />
+          </div>
+        </>
+      )}
+
+      {/* MAIN (scrollon vetëm kjo pjesë) */}
+      <main className="flex-1 h-screen overflow-y-auto">
+        <div className="p-4 md:p-6 space-y-6">
+          {/* HEADER (Mobile menu + Search + User Menu) */}
+          <div className="flex items-center justify-between gap-3">
+            {/* ✅ Mobile hamburger (vetëm në header) */}
+            {isMobile && (
               <button
                 type="button"
-                onClick={() => {
-                  setQ('');
-                  setSug([]);
-                  setOpen(false);
-                }}
-                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-gray-100 text-gray-400"
-                aria-label="Clear"
+                onClick={() => setMobileOpen(true)}
+                className="h-11 w-11 rounded-xl bg-white border border-gray-200 shadow-sm flex items-center justify-center hover:bg-gray-50"
+                aria-label="Hap navigimin"
+                title="Hap navigimin"
               >
-                <HiX className="text-lg" />
+                <HiMenu className="text-2xl text-gray-700" />
               </button>
             )}
 
-            {/* Dropdown */}
-            {canUseSearch && open && q.trim().length >= 2 && (
-              <div className="absolute z-50 mt-2 w-full rounded-xl border border-gray-100 bg-white shadow-lg overflow-hidden">
-                <div className="px-3 py-2 text-[11px] uppercase tracking-wider text-gray-400 border-b bg-gray-50/60">
-                  {loadingSug ? 'Duke kërkuar…' : 'Rezultatet'}
-                </div>
+            {/* Search */}
+            <div ref={boxRef} className="relative w-full max-w-2xl">
+              <HiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-lg" />
+              <input
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                onFocus={() => q.trim().length >= 2 && setOpen(true)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (canUseSearch) goToPeopleSearch(q);
+                  }
+                  if (e.key === 'Escape') setOpen(false);
+                }}
+                placeholder={placeholder}
+                disabled={!canUseSearch}
+                className="
+                  w-full pl-10 pr-10 py-2.5 rounded-xl
+                  border border-gray-200 bg-white
+                  text-sm text-gray-700
+                  shadow-sm
+                  focus:outline-none focus:ring-2 focus:ring-[#C9A24D]/40
+                  disabled:opacity-60 disabled:cursor-not-allowed
+                "
+              />
 
-                {!loadingSug && sug.length === 0 ? (
-                  <div className="px-3 py-3 text-sm text-gray-500">
-                    S’ka rezultate për <span className="font-medium text-gray-700">"{q.trim()}"</span>
-                  </div>
-                ) : (
-                  <div className="max-h-72 overflow-auto">
-                    {sug.map((p) => (
-                      <button
-                        key={p._id}
-                        type="button"
-                        onClick={() => goToPeopleSearch(`${p.firstName} ${p.lastName}`)}
-                        className="w-full text-left px-3 py-2 hover:bg-gray-50 flex items-center justify-between gap-3"
-                      >
-                        <div className="min-w-0">
-                          <div className="text-sm font-semibold text-gray-900 truncate">
-                            {p.firstName} {p.lastName}
-                          </div>
-                          <div className="text-xs text-gray-500 truncate">
-                            Nr. shërbimi: <span className="font-mono">{p.serviceNo}</span>
-                          </div>
-                        </div>
-                        <span className="text-[11px] text-gray-400">Enter</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-
+              {q && (
                 <button
                   type="button"
-                  onClick={() => goToPeopleSearch(q)}
-                  className="w-full px-3 py-2 text-sm font-semibold text-[#2F3E2E] hover:bg-[#2F3E2E]/5 border-t"
+                  onClick={() => {
+                    setQ('');
+                    setSug([]);
+                    setOpen(false);
+                  }}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-gray-100 text-gray-400"
+                  aria-label="Clear"
                 >
-                  Kërko “{q.trim()}” te Ushtarët
+                  <HiX className="text-lg" />
                 </button>
-              </div>
+              )}
+
+              {/* Dropdown */}
+              {canUseSearch && open && q.trim().length >= 2 && (
+                <div className="absolute z-50 mt-2 w-full rounded-xl border border-gray-100 bg-white shadow-lg overflow-hidden">
+                  <div className="px-3 py-2 text-[11px] uppercase tracking-wider text-gray-400 border-b bg-gray-50/60">{loadingSug ? 'Duke kërkuar…' : 'Rezultatet'}</div>
+
+                  {!loadingSug && sug.length === 0 ? (
+                    <div className="px-3 py-3 text-sm text-gray-500">
+                      S’ka rezultate për <span className="font-medium text-gray-700">"{q.trim()}"</span>
+                    </div>
+                  ) : (
+                    <div className="max-h-72 overflow-auto">
+                      {sug.map((p) => (
+                        <button
+                          key={p._id}
+                          type="button"
+                          onClick={() => goToPeopleSearch(`${p.firstName} ${p.lastName}`)}
+                          className="w-full text-left px-3 py-2 hover:bg-gray-50 flex items-center justify-between gap-3"
+                        >
+                          <div className="min-w-0">
+                            <div className="text-sm font-semibold text-gray-900 truncate">
+                              {p.firstName} {p.lastName}
+                            </div>
+                            <div className="text-xs text-gray-500 truncate">
+                              Nr. shërbimi: <span className="font-mono">{p.serviceNo}</span>
+                            </div>
+                          </div>
+                          <span className="text-[11px] text-gray-400">Enter</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  <button type="button" onClick={() => goToPeopleSearch(q)} className="w-full px-3 py-2 text-sm font-semibold text-[#2F3E2E] hover:bg-[#2F3E2E]/5 border-t">
+                    Kërko “{q.trim()}” te Ushtarët
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* User menu */}
+            {user && (
+              <UserMenu
+                user={user}
+                onGoProfile={() => navigate('/profile')}
+                onGoChangePassword={() => navigate('/change-password')}
+                onLogout={async () => {
+                  await logout();
+                  navigate('/login', { replace: true });
+                }}
+              />
             )}
           </div>
 
-          {/* User menu */}
-          {user && (
-            <UserMenu
-              user={user}
-              onGoProfile={() => navigate('/profile')}
-              onGoChangePassword={() => navigate('/change-password')}
-              onLogout={async () => {
-                await logout();
-                navigate('/login', { replace: true });
-              }}
-            />
-          )}
+          <Outlet />
         </div>
-
-        <Outlet />
       </main>
     </div>
   );
@@ -353,7 +499,6 @@ function UserMenu({
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
-  // close on outside click + ESC
   useEffect(() => {
     const onClickOutside = (e: MouseEvent) => {
       if (!wrapRef.current) return;
@@ -382,19 +527,14 @@ function UserMenu({
           <div className="w-9 h-9 rounded-full bg-gradient-to-r from-[#2F3E2E] to-[#C9A24D] text-white flex items-center justify-center text-sm font-semibold">
             {user.username?.slice(0, 1)?.toUpperCase() || 'U'}
           </div>
-
-          {/* ✅ dot mbetet, po s’po shkrujmë ONLINE; vetëm indikator */}
           <span className="absolute bottom-0 right-0 block h-3 w-3 rounded-full bg-emerald-500 ring-2 ring-white" />
         </div>
 
-        <div className="leading-tight text-left">
+        <div className="leading-tight text-left hidden sm:block">
           <div className="text-sm font-semibold text-gray-900">{user.username}</div>
-
-          {/* ✅ KËTU: Online -> roli */}
           <div className="text-[11px] uppercase tracking-wider text-gray-400">{formatRole(user.role)}</div>
         </div>
 
-        {/* chevron */}
         <svg className={`h-4 w-4 text-gray-500 transition-transform ${open ? 'rotate-180' : ''}`} viewBox="0 0 20 20" fill="currentColor">
           <path
             fillRule="evenodd"
@@ -459,29 +599,33 @@ function NavItem({
   label,
   current,
   icon,
+  collapsed,
 }: {
   to: string;
   label: string;
   current: boolean;
   icon: React.ReactNode;
+  collapsed: boolean;
 }) {
   return (
     <Link
       to={to}
+      title={collapsed ? label : undefined}
       className={[
         'group flex items-center gap-3 px-3 py-2.5 rounded-xl transition',
         current
           ? 'bg-gradient-to-r from-[#2F3E2E]/10 to-[#C9A24D]/10 text-gray-900 border border-[#C9A24D]/30'
           : 'text-gray-700 hover:bg-gray-100',
+        collapsed ? 'justify-center' : '',
       ].join(' ')}
     >
       <span className={['text-lg transition', current ? 'text-[#2F3E2E]' : 'text-gray-400 group-hover:text-gray-600'].join(' ')}>
         {icon}
       </span>
 
-      <span className={['text-sm font-medium', current ? 'text-gray-900' : ''].join(' ')}>{label}</span>
+      {!collapsed && <span className={['text-sm font-medium', current ? 'text-gray-900' : ''].join(' ')}>{label}</span>}
 
-      <span className={['ml-auto h-2 w-2 rounded-full transition', current ? 'bg-[#C9A24D]' : 'bg-transparent group-hover:bg-gray-300'].join(' ')} />
+      {!collapsed && <span className={['ml-auto h-2 w-2 rounded-full transition', current ? 'bg-[#C9A24D]' : 'bg-transparent group-hover:bg-gray-300'].join(' ')} />}
     </Link>
   );
 }

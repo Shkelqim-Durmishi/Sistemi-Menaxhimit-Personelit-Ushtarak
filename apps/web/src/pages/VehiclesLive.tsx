@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   getRole,
@@ -10,7 +10,19 @@ import {
   type UnitItem,
 } from '../lib/api';
 
-import { HiRefresh, HiPlus, HiSearch, HiExclamation, HiX, HiLocationMarker } from 'react-icons/hi';
+import { HiRefresh, HiPlus, HiSearch, HiExclamation, HiX } from 'react-icons/hi';
+
+// ✅ Leaflet / React-Leaflet
+import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
+
+// ✅ Fix për icon-at e Leaflet (pa import PNG — përdorim URL/CDN)
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+});
 
 type VehicleRow = {
   id: string;
@@ -81,6 +93,18 @@ function StatChip({ label, value }: { label: string; value: number | string }) {
   );
 }
 
+/** 🔥 Kur selekton veturë, harta fluturon te koordinatat e saj */
+function FlyTo({ lat, lng }: { lat: number | null; lng: number | null }) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (lat == null || lng == null) return;
+    map.flyTo([lat, lng], Math.max(map.getZoom(), 15), { duration: 0.6 });
+  }, [lat, lng, map]);
+
+  return null;
+}
+
 export default function VehiclesLive() {
   const role = getRole();
   const unitId = getCurrentUnitId();
@@ -111,12 +135,46 @@ export default function VehiclesLive() {
     deviceId: '',
   });
 
-  // ===== Row selection (for details panel) =====
+  // ===== Row selection =====
   const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  // ===== Mock mode =====
+  // ✅ Dev detection më e sigurt
+  const isDev =
+    typeof import.meta !== 'undefined' &&
+    (import.meta.env.MODE === 'development' || import.meta.env.DEV === true);
+
+  // ✅ Env flag për me e leju mock edhe kur DEV del false (si te ti)
+  const allowMockEnv =
+    typeof import.meta !== 'undefined' &&
+    (import.meta.env.VITE_ALLOW_MOCK === '1' || import.meta.env.VITE_ALLOW_MOCK === 'true');
+
+  // ✅ Mock toggle lejohet vetëm për ADMIN dhe kur është dev ose env flag
+  const canUseMock = isAdmin && (isDev || allowMockEnv);
+
+  const [mockEnabled, setMockEnabled] = useState<boolean>(false);
+  const [mockSeed, setMockSeed] = useState<number>(0);
+
+  // për polling pa “stale closures”
+  const mockEnabledRef = useRef(mockEnabled);
+  const vehiclesRef = useRef<VehicleRow[]>(vehicles);
+  const mockSeedRef = useRef(mockSeed);
+
+  useEffect(() => {
+    mockEnabledRef.current = mockEnabled;
+  }, [mockEnabled]);
+  useEffect(() => {
+    vehiclesRef.current = vehicles;
+  }, [vehicles]);
+  useEffect(() => {
+    mockSeedRef.current = mockSeed;
+  }, [mockSeed]);
 
   const filteredVehicles = useMemo(() => {
     const qq = q.trim().toLowerCase();
-    const base = canSeeAllUnits ? vehicles : vehicles.filter((v) => (v.unitId ?? null) === (unitId ?? null));
+    const base = canSeeAllUnits
+      ? vehicles
+      : vehicles.filter((v) => (v.unitId ?? null) === (unitId ?? null));
     if (!qq) return base;
     return base.filter((v) => `${v.plateNumber} ${v.name ?? ''}`.toLowerCase().includes(qq));
   }, [vehicles, q, canSeeAllUnits, unitId]);
@@ -149,7 +207,40 @@ export default function VehiclesLive() {
     );
   }
 
-  async function loadLive() {
+  function buildMockLiveRows(allVehicles: VehicleRow[], seed: number): LiveRow[] {
+    const now = new Date().toISOString();
+
+    // Qendra: Prishtinë
+    const baseLat = 42.6629;
+    const baseLng = 21.1655;
+
+    const list = allVehicles.slice(0, 30); // max 30 marker-a
+    return list.map((v, i) => {
+      const t = (seed + i) * 0.7;
+      return {
+        vehicleId: v.id,
+        lat: baseLat + 0.02 * Math.cos(t),
+        lng: baseLng + 0.03 * Math.sin(t),
+        speed: 20 + ((i * 9 + seed * 3) % 70),
+        heading: (i * 55 + seed * 15) % 360,
+        capturedAt: now,
+        unitId: v.unitId ?? null,
+      };
+    });
+  }
+
+  async function loadLive(opts?: { seedOverride?: number }) {
+    // ✅ mock data (kur lejohet)
+    if (canUseMock && mockEnabledRef.current) {
+      const seed = opts?.seedOverride ?? mockSeedRef.current;
+      const rows = buildMockLiveRows(vehiclesRef.current, seed);
+
+      if (!canSeeAllUnits) setLive(rows.filter((r) => (r.unitId ?? null) === (unitId ?? null)));
+      else setLive(rows);
+      return;
+    }
+
+    // ✅ reale
     const data: any[] = await listVehiclesLive();
 
     const rows: LiveRow[] = (data ?? [])
@@ -184,21 +275,33 @@ export default function VehiclesLive() {
     }
   }
 
+  // initial
   useEffect(() => {
     if (!canSee) return;
     refreshAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // polling live
+  // polling live (interval i vetëm)
   useEffect(() => {
     if (!canSee) return;
+
     const id = window.setInterval(() => {
-      loadLive().catch(() => { });
+      if (canUseMock && mockEnabledRef.current) {
+        // rrit seed dhe rifresko mock
+        setMockSeed((s) => {
+          const next = s + 1;
+          loadLive({ seedOverride: next }).catch(() => { });
+          return next;
+        });
+      } else {
+        loadLive().catch(() => { });
+      }
     }, Math.max(2000, pollMs));
+
     return () => window.clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pollMs, canSee, canSeeAllUnits, unitId]);
+  }, [pollMs, canSee, canUseMock, canSeeAllUnits, unitId]);
 
   // ADMIN: load units once
   useEffect(() => {
@@ -228,7 +331,6 @@ export default function VehiclesLive() {
 
   async function submitAdd() {
     setModalErr('');
-
     if (!form.name.trim() || !form.plateNumber.trim() || !form.unitId) {
       setModalErr('Plotëso Emrin, Targën dhe Unit-in.');
       return;
@@ -253,6 +355,7 @@ export default function VehiclesLive() {
     }
   }
 
+  // stats
   const stats = useMemo(() => {
     let liveOk = 0;
     let stale = 0;
@@ -284,8 +387,6 @@ export default function VehiclesLive() {
 
   const selLat = selectedLive?.lat ?? null;
   const selLng = selectedLive?.lng ?? null;
-  const selMapsUrl =
-    selLat != null && selLng != null ? `https://www.google.com/maps?q=${encodeURIComponent(selLat)},${encodeURIComponent(selLng)}` : '';
 
   const selectedStatus = !selectedVehicle
     ? null
@@ -294,6 +395,41 @@ export default function VehiclesLive() {
       : isStale(selectedLive.capturedAt, 5)
         ? 'STALE'
         : 'LIVE';
+
+  // ✅ Marker points në hartë
+  const mapPoints = useMemo(() => {
+    return filteredVehicles
+      .map((v) => {
+        const p = liveById.get(v.id);
+        if (!p) return null;
+        if (p.lat == null || p.lng == null) return null;
+        return {
+          id: v.id,
+          plate: v.plateNumber,
+          name: v.name ?? '—',
+          lat: p.lat,
+          lng: p.lng,
+          stale: isStale(p.capturedAt, 5),
+          updated: p.capturedAt,
+          speed: p.speed ?? null,
+          heading: p.heading ?? null,
+        };
+      })
+      .filter(Boolean) as Array<{
+        id: string;
+        plate: string;
+        name: string;
+        lat: number;
+        lng: number;
+        stale: boolean;
+        updated: string;
+        speed: number | null;
+        heading: number | null;
+      }>;
+  }, [filteredVehicles, liveById]);
+
+  // ✅ center default
+  const defaultCenter: [number, number] = [42.6675, 21.1662];
 
   return (
     <div className="space-y-5">
@@ -304,7 +440,7 @@ export default function VehiclesLive() {
             <h1 className="text-2xl font-semibold tracking-tight text-gray-900">Veturat (GPS Live)</h1>
             <p className="text-sm text-gray-600">
               {role === 'ADMIN' ? (
-                'ADMIN i sheh krejt veturat / lokacionet.'
+                ''
               ) : (
                 <>
                   Sheh vetëm veturat e unit-it tënd{' '}
@@ -312,9 +448,34 @@ export default function VehiclesLive() {
                 </>
               )}
             </p>
+
+
           </div>
 
           <div className="flex items-center gap-2">
+            {/* ✅ Mock toggle (vetëm kur lejohet) */}
+            {canUseMock ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setMockEnabled((s) => !s);
+                  // kur e ndez/ndez prapë, rifresko live menjëherë
+                  setTimeout(() => {
+                    loadLive().catch(() => { });
+                  }, 0);
+                }}
+                className={[
+                  'inline-flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-semibold shadow-sm border',
+                  mockEnabled
+                    ? 'bg-amber-50 border-amber-200 text-amber-900 hover:bg-amber-100'
+                    : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50',
+                ].join(' ')}
+                title="Aktivizo/çaktivizo Test Live (Mock)"
+              >
+                {mockEnabled ? 'Test Live: ON' : 'Test Live: OFF'}
+              </button>
+            ) : null}
+
             {isAdmin && (
               <button
                 onClick={openAdd}
@@ -396,17 +557,17 @@ export default function VehiclesLive() {
         </div>
       </div>
 
-      {/* Main layout: table + details */}
+      {/* Main layout */}
       <div className="grid lg:grid-cols-12 gap-4">
         {/* Table */}
-        <div className="lg:col-span-8 bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+        <div className="lg:col-span-7 bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
           <div className="px-4 py-3 border-b bg-white flex items-center justify-between">
             <div className="font-semibold text-gray-900">Lista</div>
             <div className="text-xs text-gray-500">“Stale” = s’është përditësu në 5 minuta</div>
           </div>
 
           <div className="overflow-x-auto max-h-[560px]">
-            <table className="min-w-[1040px] w-full text-sm">
+            <table className="min-w-[980px] w-full text-sm">
               <thead className="bg-gray-50/70 sticky top-0 z-10">
                 <tr className="text-left text-[11px] uppercase tracking-wider text-gray-500 border-b">
                   <th className="px-4 py-3">Targa</th>
@@ -417,7 +578,6 @@ export default function VehiclesLive() {
                   <th className="px-4 py-3">Shpejtësia</th>
                   <th className="px-4 py-3">Heading</th>
                   <th className="px-4 py-3">Përditësuar</th>
-                  <th className="px-4 py-3 w-40">Harta</th>
                 </tr>
               </thead>
 
@@ -430,11 +590,6 @@ export default function VehiclesLive() {
                   const lat = p?.lat ?? null;
                   const lng = p?.lng ?? null;
 
-                  const mapsUrl =
-                    lat != null && lng != null
-                      ? `https://www.google.com/maps?q=${encodeURIComponent(lat)},${encodeURIComponent(lng)}`
-                      : '';
-
                   const rowSelected = selectedId === v.id;
 
                   return (
@@ -445,11 +600,10 @@ export default function VehiclesLive() {
                         rowSelected ? 'bg-[#C9A24D]/10' : '',
                       ].join(' ')}
                       onClick={() => setSelectedId(v.id)}
-                      title="Kliko për detaje"
+                      title="Kliko për detaje / hartë"
                     >
                       <td className="px-4 py-3 font-semibold text-gray-900 font-mono">{v.plateNumber}</td>
                       <td className="px-4 py-3 text-gray-700">{v.name ?? '—'}</td>
-
                       <td className="px-4 py-3">
                         {!hasLive ? (
                           <Badge tone="gray">PA SINJAL</Badge>
@@ -459,36 +613,18 @@ export default function VehiclesLive() {
                           <Badge tone="green">LIVE</Badge>
                         )}
                       </td>
-
                       <td className="px-4 py-3 font-mono text-gray-700">{lat ?? '—'}</td>
                       <td className="px-4 py-3 font-mono text-gray-700">{lng ?? '—'}</td>
                       <td className="px-4 py-3 text-gray-700">{p?.speed ?? '—'}</td>
                       <td className="px-4 py-3 text-gray-700">{p?.heading ?? '—'}</td>
                       <td className="px-4 py-3 text-gray-700">{p ? fmtDate(p.capturedAt) : '—'}</td>
-
-                      <td className="px-4 py-3">
-                        {mapsUrl ? (
-                          <a
-                            className="inline-flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-semibold border border-gray-200 bg-white hover:bg-gray-50 shadow-sm"
-                            href={mapsUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <HiLocationMarker className="text-lg text-gray-500" />
-                            Hap në Maps
-                          </a>
-                        ) : (
-                          <span className="text-gray-400">—</span>
-                        )}
-                      </td>
                     </tr>
                   );
                 })}
 
                 {!filteredVehicles.length ? (
                   <tr>
-                    <td colSpan={9} className="px-4 py-10 text-center text-gray-500">
+                    <td colSpan={8} className="px-4 py-10 text-center text-gray-500">
                       S’ka vetura për këtë filtër.
                     </td>
                   </tr>
@@ -498,8 +634,58 @@ export default function VehiclesLive() {
           </div>
         </div>
 
-        {/* Details panel */}
-        <div className="lg:col-span-4">
+        {/* MAP + Details */}
+        <div className="lg:col-span-5 space-y-4">
+          {/* Map */}
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden relative z-0">
+            <div className="px-4 py-3 border-b bg-white flex items-center justify-between">
+              <div className="font-semibold text-gray-900">Harta (Live)</div>
+              <div className="text-xs text-gray-500">
+                {selectedVehicle ? `E selektuar: ${selectedVehicle.plateNumber}` : 'Kliko një veturë'}
+              </div>
+            </div>
+
+            <div className="h-[360px]">
+              <MapContainer
+                center={selLat != null && selLng != null ? [selLat, selLng] : defaultCenter}
+                zoom={selLat != null && selLng != null ? 15 : 9}
+                scrollWheelZoom
+                className="h-full w-full"
+              >
+                <TileLayer
+                  attribution="&copy; OpenStreetMap contributors"
+                  url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                />
+
+                <FlyTo lat={selLat} lng={selLng} />
+
+                {mapPoints.map((p) => (
+                  <Marker
+                    key={p.id}
+                    position={[p.lat, p.lng]}
+                    eventHandlers={{
+                      click: () => setSelectedId(p.id),
+                    }}
+                  >
+                    <Popup>
+                      <div className="space-y-1">
+                        <div className="font-semibold">{p.plate}</div>
+                        <div className="text-xs">{p.name}</div>
+                        <div className="text-xs">Status: {p.stale ? 'STALE' : 'LIVE'}</div>
+                        <div className="text-xs">Përditësuar: {fmtDate(p.updated)}</div>
+                      </div>
+                    </Popup>
+                  </Marker>
+                ))}
+              </MapContainer>
+            </div>
+
+            <div className="px-4 py-3 border-t text-xs text-gray-500">
+              Kliko marker-at për info. Kliko rresht në tabelë → harta fluturon te vetura.
+            </div>
+          </div>
+
+          {/* Details */}
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
             <div className="flex items-center justify-between mb-2">
               <div className="font-semibold text-gray-900">Detaje</div>
@@ -516,9 +702,7 @@ export default function VehiclesLive() {
             </div>
 
             {!selectedVehicle ? (
-              <div className="text-sm text-gray-600">
-                Kliko një rresht në tabelë për me i pa detajet e veturës.
-              </div>
+              <div className="text-sm text-gray-600">Kliko një rresht në tabelë ose një marker në hartë.</div>
             ) : (
               <div className="space-y-3">
                 <div className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-2">
@@ -559,33 +743,19 @@ export default function VehiclesLive() {
                     <div className="text-gray-900">{selectedLive?.heading ?? '—'}</div>
                   </div>
                 </div>
-
-                {selMapsUrl ? (
-                  <a
-                    className="inline-flex w-full items-center justify-center gap-2 px-3 py-2 rounded-xl text-sm font-semibold text-white bg-gray-900 hover:bg-black shadow-sm"
-                    href={selMapsUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    <HiLocationMarker className="text-lg" />
-                    Hap në Google Maps
-                  </a>
-                ) : (
-                  <div className="text-xs text-gray-500">S’ka koordinata për me hap Maps.</div>
-                )}
               </div>
             )}
           </div>
 
-          <div className="mt-3 text-xs text-gray-500">
-            ⚙️ Kur t’i kesh pajisjet GPS, backend-i veç duhet me furnizu <span className="font-mono">/vehicles/live</span> me koordinata reale.
+          <div className="text-xs text-gray-500">
+            ⚙️ Backend-i duhet me furnizu <span className="font-mono">/vehicles/live</span> me koordinata reale.
           </div>
         </div>
       </div>
 
       {/* ===== MODAL: Add Vehicle (ADMIN only) ===== */}
       {showAdd && isAdmin ? (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-[9999]">
           <div className="bg-white w-full max-w-lg rounded-2xl shadow-xl overflow-hidden border border-gray-100">
             <div className="px-4 py-3 border-b flex items-center justify-between">
               <div className="font-semibold text-gray-900">Shto veturë</div>

@@ -2,13 +2,16 @@
 
 import { Schema, model, Types } from 'mongoose';
 
+export type Role = 'ADMIN' | 'OFFICER' | 'OPERATOR' | 'COMMANDER' | 'AUDITOR';
+
 export type ChangeRequestType =
     | 'DELETE_PERSON'
     | 'TRANSFER_PERSON'
     | 'CHANGE_GRADE'
     | 'CHANGE_UNIT'
     | 'DEACTIVATE_PERSON'
-    | 'UPDATE_PERSON'; // ✅ NEW
+    | 'UPDATE_PERSON'
+    | 'CREATE_USER'; // ✅ NEW (admin-only flow)
 
 export type ChangeRequestStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED';
 
@@ -22,7 +25,8 @@ const ChangeRequestSchema = new Schema(
                 'CHANGE_GRADE',
                 'CHANGE_UNIT',
                 'DEACTIVATE_PERSON',
-                'UPDATE_PERSON', // ✅ NEW
+                'UPDATE_PERSON',
+                'CREATE_USER', // ✅ NEW
             ],
             required: true,
             index: true,
@@ -37,18 +41,43 @@ const ChangeRequestSchema = new Schema(
 
         // kush e krijoi
         createdBy: { type: Types.ObjectId, ref: 'User', required: true, index: true },
+
         createdByRole: {
             type: String,
             enum: ['ADMIN', 'OFFICER', 'OPERATOR', 'COMMANDER', 'AUDITOR'],
             required: true,
         },
+
         createdByUnitId: { type: Types.ObjectId, ref: 'Unit', default: null, index: true },
 
-        // per cilin ushtar/person
-        personId: { type: Types.ObjectId, ref: 'Person', required: true, index: true },
+        /**
+         * ✅ personId
+         * - për request-at e personit është required
+         * - për CREATE_USER është NULL
+         */
+        personId: {
+            type: Types.ObjectId,
+            ref: 'Person',
+            default: null,
+            index: true,
+            required: function (this: any) {
+                return this.type !== 'CREATE_USER';
+            },
+        },
 
-        // unit target: për filtrimin e COMMANDER-it (unit i personit “aktual” para ndryshimit)
+        /**
+         * ✅ Routing
+         * - targetUnitId: për request-at e personit (inbox komandantit)
+         * - targetRole: kur është 'ADMIN' -> admin-only inbox
+         */
         targetUnitId: { type: Types.ObjectId, ref: 'Unit', required: true, index: true },
+
+        targetRole: {
+            type: String,
+            enum: ['ADMIN', 'OFFICER', 'OPERATOR', 'COMMANDER', 'AUDITOR'],
+            default: null,
+            index: true,
+        },
 
         // payload (opsionale sipas tipit)
         payload: {
@@ -58,7 +87,7 @@ const ChangeRequestSchema = new Schema(
             // change grade
             newGradeId: { type: String, default: null },
 
-            // arsye / shenime
+            // arsye / shenime (operator/commander)
             reason: { type: String, default: '' },
 
             /**
@@ -66,30 +95,34 @@ const ChangeRequestSchema = new Schema(
              * payload.meta.patch = { firstName, lastName, phone, city, ... }
              */
             meta: { type: Schema.Types.Mixed, default: {} },
+
+            /**
+             * ✅ CREATE_USER
+             * payload.user = { username, email, role, unitId, contractValidFrom, contractValidTo, neverExpires, mustChangePassword }
+             */
+            user: { type: Schema.Types.Mixed, default: null },
         },
 
-        // vendimi i komandantit
+        // vendimi
         decidedBy: { type: Types.ObjectId, ref: 'User', default: null },
         decidedAt: { type: Date, default: null },
         decisionNote: { type: String, default: '' },
 
-        /**
-         * ✅ PDF (opsionale)
-         * Kur komandanti aprovon/refuzon, mundesh me gjeneru PDF dhe:
-         * - pdf.path = "/uploads/requests/req-....pdf"
-         * - pdf.generatedAt = data e gjenerimit
-         * - docNo = numri protokollit (nëse don me pas si në template)
-         */
+        // PDF
         docNo: { type: String, default: '' },
+
         pdf: {
-            path: { type: String, default: '' }, // p.sh. "/uploads/requests/req-xxx.pdf"
+            path: { type: String, default: '' },
             generatedAt: { type: Date, default: null },
         },
     },
     { timestamps: true }
 );
 
-// query tipike: status + unit (për komandant) + më të rejat
+// inbox komandant: status + targetUnitId + më të rejat
 ChangeRequestSchema.index({ status: 1, targetUnitId: 1, createdAt: -1 });
+
+// inbox admin-only: status + targetRole + më të rejat
+ChangeRequestSchema.index({ status: 1, targetRole: 1, createdAt: -1 });
 
 export default model('ChangeRequest', ChangeRequestSchema);

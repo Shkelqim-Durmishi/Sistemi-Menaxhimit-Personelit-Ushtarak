@@ -23,7 +23,7 @@ export default function Login() {
 
     async function redirectAfterLogin() {
         const role = getRole();
-        if (role === 'COMMANDER' || role === 'ADMIN') nav('/approvals');
+        if (role === 'COMMANDER' || role === 'ADMIN') nav('/dashboard');
         else nav('/');
     }
 

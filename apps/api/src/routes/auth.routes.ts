@@ -1,7 +1,11 @@
+// apps/api/src/routes/auth.routes.ts
+
 import { Router } from 'express';
 import argon2 from 'argon2';
+import bcrypt from 'bcryptjs';
 import jwt, { SignOptions, Secret } from 'jsonwebtoken';
 import geoip from 'geoip-lite';
+import { Types } from 'mongoose';
 
 import User from '../models/User';
 import { env } from '../config/env';
@@ -18,15 +22,18 @@ const MAX_FAILED_LOGINS = 5;
 const FAILED_WARNING_THRESHOLD = 3;
 
 // vendet nga lejohet login (p.sh. vetëm Kosovë: XK)
+// ⚠️ nëse e teston jashtë XK, ose e ke serverin në AL, shtoje edhe 'AL' ose hiqe krejt këtë kontroll.
 const ALLOWED_LOGIN_COUNTRIES = ['XK'];
 
-// normalizim i expiresIn
+/* =====================
+   Helpers
+===================== */
+
 function normalizeExpires(v: string): SignOptions['expiresIn'] {
   if (/^\d+$/.test(v)) return Number(v);
   return v as unknown as SignOptions['expiresIn'];
 }
 
-// merr IP e klientit
 function getClientIp(req: any): string {
   const xf = req.headers['x-forwarded-for'] as string | undefined;
   if (xf) {
@@ -36,12 +43,11 @@ function getClientIp(req: any): string {
   return (req.socket?.remoteAddress as string) || req.ip || '';
 }
 
-// kontrollo nëse IP është lokale / private (dev, LAN)
 function isPrivateOrLocalIp(ip: string | undefined | null): boolean {
   if (!ip) return true;
   if (ip === '127.0.0.1' || ip === '::1') return true;
 
-  // hiq prefix-in për IPv6 mapped IPv4, p.sh. ::ffff:192.168.0.1
+  // IPv6 mapped IPv4
   const clean = ip.startsWith('::ffff:') ? ip.substring(7) : ip;
 
   return (
@@ -66,48 +72,203 @@ function isPrivateOrLocalIp(ip: string | undefined | null): boolean {
   );
 }
 
+function escapeRegExp(s: string) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function fmtDate(d: Date = new Date()) {
+  // p.sh. 16.02.2026 16:33
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const dd = pad(d.getDate());
+  const mm = pad(d.getMonth() + 1);
+  const yyyy = d.getFullYear();
+  const hh = pad(d.getHours());
+  const mi = pad(d.getMinutes());
+  return `${dd}.${mm}.${yyyy} ${hh}:${mi}`;
+}
+
+function pickUserAgent(req: any): string {
+  const ua = String(req.headers?.['user-agent'] || '').trim();
+  return ua || '—';
+}
+
+function toCountry(ip: string): string {
+  try {
+    const geo = ip ? geoip.lookup(ip) : null;
+    return geo?.country ?? 'UNKNOWN';
+  } catch {
+    return 'UNKNOWN';
+  }
+}
+
+/**
+ * Verifikon password-in me argon2 ose bcrypt (kompatibilitet)
+ */
+async function verifyPassword(hash: string, plain: string): Promise<boolean> {
+  const h = String(hash || '');
+
+  // argon2
+  if (h.startsWith('$argon2')) {
+    try {
+      return await argon2.verify(h, plain);
+    } catch {
+      return false;
+    }
+  }
+
+  // bcrypt
+  if (h.startsWith('$2a$') || h.startsWith('$2b$') || h.startsWith('$2y$')) {
+    try {
+      return await bcrypt.compare(plain, h);
+    } catch {
+      return false;
+    }
+  }
+
+  // fallback
+  try {
+    const okA = await argon2.verify(h, plain);
+    if (okA) return true;
+  } catch { }
+  try {
+    const okB = await bcrypt.compare(plain, h);
+    if (okB) return true;
+  } catch { }
+  return false;
+}
+
+type EmailBoxItem = { label: string; value: string };
+
+function emailBox(items: EmailBoxItem[]) {
+  const rows = items
+    .map(
+      (it) =>
+        `<tr>
+          <td style="padding:6px 10px;color:#94a3b8;white-space:nowrap;"><b>${it.label}</b></td>
+          <td style="padding:6px 10px;color:#0f172a;">${it.value || '—'}</td>
+        </tr>`
+    )
+    .join('');
+
+  return `
+    <div style="border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;background:#ffffff;">
+      <div style="background:#0b1220;color:#e2e8f0;padding:10px 14px;font-weight:700;letter-spacing:.2px;">
+        🔎 Detajet e Aktivitetit
+      </div>
+      <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+        ${rows}
+      </table>
+    </div>
+  `.trim();
+}
+
+function buildEmailHtml(opts: {
+  title: string;
+  intro: string;
+  items: EmailBoxItem[];
+  footerNote?: string;
+  severity?: 'info' | 'warning' | 'danger';
+}) {
+  const severityColor =
+    opts.severity === 'danger' ? '#b91c1c' : opts.severity === 'warning' ? '#b45309' : '#0f172a';
+
+  return `
+  <div style="font-family:Arial,Helvetica,sans-serif;background:#0b1220;padding:26px;">
+    <div style="max-width:640px;margin:0 auto;background:#ffffff;border-radius:14px;overflow:hidden;box-shadow:0 8px 30px rgba(0,0,0,.25);">
+      <div style="padding:18px 20px;background:#0b1220;color:#e2e8f0;">
+        <div style="font-size:12px;letter-spacing:.12em;text-transform:uppercase;opacity:.9">
+          Sistemi i Menaxhimit Ushtarak
+        </div>
+        <div style="margin-top:6px;font-size:20px;font-weight:800;color:#ffffff;">
+          ${opts.title}
+        </div>
+      </div>
+ 
+      <div style="padding:20px;color:#0f172a;">
+        <p style="margin:0 0 12px;line-height:1.55;">
+          ${opts.intro}
+        </p>
+ 
+        ${emailBox(opts.items)}
+ 
+        <div style="margin-top:14px;padding:12px 14px;border-left:4px solid ${severityColor};background:#f8fafc;border-radius:10px;">
+          <div style="font-weight:700;margin-bottom:6px;">Udhëzim sigurie</div>
+          <div style="line-height:1.55;color:#334155;">
+            Nëse ky aktivitet nuk është kryer nga ju, ju rekomandojmë:
+            <ul style="margin:8px 0 0 18px;">
+              <li>Ndryshimin e menjëhershëm të fjalëkalimit</li>
+              <li>Njoftimin e administratorit të njësisë</li>
+              <li>Verifikimin e pajisjeve të autorizuara</li>
+            </ul>
+          </div>
+        </div>
+ 
+        ${opts.footerNote ? `<p style="margin:14px 0 0;color:#334155;line-height:1.55;">${opts.footerNote}</p>` : ''}
+ 
+        <hr style="border:none;border-top:1px solid #e2e8f0;margin:18px 0;" />
+ 
+        <div style="font-size:12px;color:#64748b;line-height:1.6">
+          Ky mesazh është gjeneruar automatikisht nga sistemi. Ju lutemi mos i përgjigjeni këtij emaili.<br/>
+          <b>Komanda e Sistemit</b> – Departamenti i Sigurisë së Informacionit
+        </div>
+      </div>
+    </div>
+ 
+    <div style="max-width:640px;margin:12px auto 0;font-size:11px;color:#94a3b8;text-align:center;line-height:1.5;">
+      © ${new Date().getFullYear()} Sistemi i Menaxhimit Ushtarak • Konfidencial – vetëm për përdorim të autorizuar
+    </div>
+  </div>
+  `.trim();
+}
+
+async function safeSendAdmin(subject: string, html: string) {
+  if (!env.ADMIN_EMAIL) return;
+  try {
+    await sendSecurityAlert(env.ADMIN_EMAIL, subject, html);
+  } catch (e) {
+    console.error('❌ Dështoi dërgimi i email-it:', e);
+  }
+}
+
 /* =====================
       LOGIN
 ===================== */
 
 r.post('/login', async (req, res) => {
-  const { username, password } = req.body ?? {};
+  const username = String(req.body?.username ?? '').trim();
+  const password = String(req.body?.password ?? '');
 
   if (!username || !password) {
-    return res
-      .status(400)
-      .json({ code: 'VALIDATION_ERROR', message: 'username & password required' });
+    return res.status(400).json({ code: 'VALIDATION_ERROR', message: 'username & password required' });
   }
 
   const ip = getClientIp(req);
+  const ua = pickUserAgent(req);
+  const now = new Date();
 
-  // 0️⃣ GEO-BLOCK: nëse IP nuk është lokale/private → kontrollo vendin
+  // 0️⃣ GEO-BLOCK (vetëm nëse IP s’është private/local)
   if (!isPrivateOrLocalIp(ip)) {
-    const geo = ip ? geoip.lookup(ip) : null;
-    const country = geo?.country ?? 'UNKNOWN';
+    const country = toCountry(ip);
 
     if (!ALLOWED_LOGIN_COUNTRIES.includes(country)) {
-      // dërgo email adminit
-      if (env.ADMIN_EMAIL) {
-        try {
-          await sendSecurityAlert(
-            env.ADMIN_EMAIL,
-            '⛔ Tentim kyçje nga vend i paautorizuar',
-            `
-              <h2>Tentim kyçje i bllokuar (GEO-BLOCK)</h2>
-              <p>U detektua një tentim kyçje nga një vend që nuk lejohet.</p>
-              <ul>
-                <li><b>Username (i dhënë):</b> ${username}</li>
-                <li><b>IP:</b> ${ip || 'e panjohur'}</li>
-                <li><b>Vend (Geo-IP):</b> ${country}</li>
-                <li><b>Koha:</b> ${new Date().toLocaleString()}</li>
-              </ul>
-            `.trim()
-          );
-        } catch (e) {
-          console.error('❌ Dështoi dërgimi i email-it (geo-block):', e);
-        }
-      }
+      const html = buildEmailHtml({
+        title: 'NJOFTIM SIGURIE – Tentim Kyçjeje i Bllokuar',
+        intro:
+          'Ju njoftojmë se sistemi ka bllokuar një tentim kyçjeje nga një vend i paautorizuar, në përputhje me politikat e sigurisë.',
+        severity: 'danger',
+        items: [
+          { label: 'Lloji i aktivitetit', value: 'Tentim kyçjeje (GEO-BLOCK)' },
+          { label: 'Username (i dhënë)', value: username },
+          { label: 'Data / Ora', value: fmtDate(now) },
+          { label: 'Adresa IP', value: ip || '—' },
+          { label: 'Vend (Geo-IP)', value: country },
+          { label: 'Pajisja / Platforma', value: ua },
+        ],
+        footerNote:
+          'Nëse ky tentim është i dyshimtë, rekomandohet verifikim i menjëhershëm i politikave të aksesit dhe ndryshim i kredencialeve për përdoruesit e prekur.',
+      });
+
+      await safeSendAdmin('NJOFTIM SIGURIE – Tentim Kyçjeje i Bllokuar (GEO-BLOCK)', html);
 
       return res.status(403).json({
         code: 'GEO_BLOCKED',
@@ -116,70 +277,63 @@ r.post('/login', async (req, res) => {
     }
   }
 
-  const user = await User.findOne({ username });
-
-  // 1️⃣ Username nuk ekziston → dërgo email adminit
+  // 1) gjej user-in (exact, pastaj case-insensitive)
+  let user = await User.findOne({ username }).exec();
   if (!user) {
-    if (env.ADMIN_EMAIL) {
-      try {
-        await sendSecurityAlert(
-          env.ADMIN_EMAIL,
-          '⚠️ Tentim kyçje me username të panjohur',
-          `
-            <h2>Tentim kyçje i dyshimtë</h2>
-            <p>U detektua një tentim kyçje me username që <b>NUK</b> ekziston në sistem.</p>
-            <ul>
-              <li><b>Username:</b> ${username}</li>
-              <li><b>IP:</b> ${ip || 'e panjohur'}</li>
-              <li><b>Koha:</b> ${new Date().toLocaleString()}</li>
-            </ul>
-          `.trim()
-        );
-      } catch (e) {
-        console.error('❌ Dështoi dërgimi i email-it (unknown username):', e);
-      }
-    }
+    user = await User.findOne({ username: new RegExp(`^${escapeRegExp(username)}$`, 'i') }).exec();
+  }
 
+  // 2) Username s’ekziston → alert admin
+  if (!user) {
+    const html = buildEmailHtml({
+      title: 'NJOFTIM SIGURIE – Tentim Kyçjeje i Dyshimtë',
+      intro:
+        'U regjistrua një tentim kyçjeje me një username që nuk ekziston në sistem. Kjo mund të jetë përpjekje e paautorizuar.',
+      severity: 'warning',
+      items: [
+        { label: 'Lloji i aktivitetit', value: 'Kyçje me username të panjohur' },
+        { label: 'Username (i dhënë)', value: username },
+        { label: 'Data / Ora', value: fmtDate(now) },
+        { label: 'Adresa IP', value: ip || '—' },
+        { label: 'Pajisja / Platforma', value: ua },
+      ],
+    });
+
+    await safeSendAdmin('NJOFTIM SIGURIE – Tentim Kyçjeje me Username të Panjohur', html);
     return res.status(401).json({ code: 'INVALID_CREDENTIALS' });
   }
 
-  // kontrolli i bllokimit
   const uAny: any = user;
 
+  // 3) user i bllokuar
   if (uAny.isBlocked) {
-    // (opsionale) email kur provon dikush me user të bllokuar
-    if (env.ADMIN_EMAIL) {
-      try {
-        await sendSecurityAlert(
-          env.ADMIN_EMAIL,
-          '⚠️ Tentim kyçje me përdorues të bllokuar',
-          `
-            <h2>Tentim kyçje me user të bllokuar</h2>
-            <ul>
-              <li><b>Username:</b> ${user.username}</li>
-              <li><b>IP:</b> ${ip || 'e panjohur'}</li>
-              <li><b>Arsye bllokimi:</b> ${uAny.blockReason || '—'}</li>
-              <li><b>Koha:</b> ${new Date().toLocaleString()}</li>
-            </ul>
-          `.trim()
-        );
-      } catch (e) {
-        console.error('❌ Dështoi dërgimi i email-it (blocked user login try):', e);
-      }
-    }
+    const html = buildEmailHtml({
+      title: 'NJOFTIM SIGURIE – Tentim Kyçjeje me Llogari të Bllokuar',
+      intro:
+        'U regjistrua një tentim kyçjeje në një llogari të bllokuar. Sistemi ka refuzuar aksesin sipas politikave të sigurisë.',
+      severity: 'danger',
+      items: [
+        { label: 'Lloji i aktivitetit', value: 'Tentim kyçjeje (llogari e bllokuar)' },
+        { label: 'Username', value: user.username },
+        { label: 'Data / Ora', value: fmtDate(now) },
+        { label: 'Adresa IP', value: ip || '—' },
+        { label: 'Arsye bllokimi', value: String(uAny.blockReason || '—') },
+        { label: 'Pajisja / Platforma', value: ua },
+      ],
+    });
+
+    await safeSendAdmin('NJOFTIM SIGURIE – Tentim Kyçjeje në Llogari të Bllokuar', html);
 
     return res.status(423).json({
       code: 'USER_BLOCKED',
-      message:
-        uAny.blockReason ||
-        'Ky përdorues është bllokuar. Ju lutem kontaktoni administratorin.',
+      message: uAny.blockReason || 'Ky përdorues është bllokuar. Ju lutem kontaktoni administratorin.',
     });
   }
 
-  const valid = await argon2.verify(user.passwordHash, password);
+  // 4) verifiko password (argon2 ose bcrypt)
+  const valid = await verifyPassword(String(user.passwordHash), password);
 
   if (!valid) {
-    // 2️⃣ Password i gabuar → rrit count, dërgo email nëse arrin pragun
     uAny.failedLoginCount = (uAny.failedLoginCount ?? 0) + 1;
     uAny.lastFailedLoginAt = new Date();
 
@@ -193,113 +347,99 @@ r.post('/login', async (req, res) => {
 
     await user.save();
 
-    // 2a) Nqs sapo kalon pragun (p.sh. 3 tentativa të dështuara) → email
-    if (!justBlocked && uAny.failedLoginCount === FAILED_WARNING_THRESHOLD && env.ADMIN_EMAIL) {
-      try {
-        await sendSecurityAlert(
-          env.ADMIN_EMAIL,
-          '⚠️ Shumë tentativa të dështuara për kyçje',
-          `
-            <h2>Tentativa të shumta kyçjeje me password të gabuar</h2>
-            <ul>
-              <li><b>Username:</b> ${user.username}</li>
-              <li><b>Tentativa të dështuara:</b> ${uAny.failedLoginCount}</li>
-              <li><b>IP e fundit:</b> ${ip || 'e panjohur'}</li>
-              <li><b>Koha e fundit:</b> ${new Date().toLocaleString()}</li>
-            </ul>
-          `.trim()
-        );
-      } catch (e) {
-        console.error('❌ Dështoi dërgimi i email-it (failed attempts threshold):', e);
-      }
+    // email kur arrin pragun (p.sh. 3 tentativa)
+    if (!justBlocked && uAny.failedLoginCount === FAILED_WARNING_THRESHOLD) {
+      const html = buildEmailHtml({
+        title: 'NJOFTIM SIGURIE – Tentativa të Shumta të Dështuara',
+        intro:
+          'Sistemi ka regjistruar tentativa të përsëritura kyçjeje me fjalëkalim të pasaktë. Rekomandohet verifikim i menjëhershëm.',
+        severity: 'warning',
+        items: [
+          { label: 'Lloji i aktivitetit', value: 'Tentativa të dështuara (password i pasaktë)' },
+          { label: 'Username', value: user.username },
+          { label: 'Tentativa të dështuara', value: String(uAny.failedLoginCount) },
+          { label: 'Data / Ora', value: fmtDate(now) },
+          { label: 'Adresa IP', value: ip || '—' },
+          { label: 'Pajisja / Platforma', value: ua },
+        ],
+      });
+
+      await safeSendAdmin('NJOFTIM SIGURIE – Tentativa të Shumta të Dështuara për Kyçje', html);
     }
 
-    // 3️⃣ Nëse sapo u bllokua → email i veçantë
-    if (justBlocked && env.ADMIN_EMAIL) {
-      try {
-        await sendSecurityAlert(
-          env.ADMIN_EMAIL,
-          '⛔ Përdoruesi u bllokua (shumë tentativa të dështuara)',
-          `
-            <h2>Përdoruesi u bllokua</h2>
-            <ul>
-              <li><b>Username:</b> ${user.username}</li>
-              <li><b>IP e fundit:</b> ${ip || 'e panjohur'}</li>
-              <li><b>Tentativa të dështuara gjithsej:</b> ${uAny.failedLoginCount}</li>
-              <li><b>Koha:</b> ${new Date().toLocaleString()}</li>
-            </ul>
-          `.trim()
-        );
-      } catch (e) {
-        console.error('❌ Dështoi dërgimi i email-it (user blocked):', e);
-      }
+    // email kur bllokohet
+    if (justBlocked) {
+      const html = buildEmailHtml({
+        title: 'NJOFTIM SIGURIE – Llogaria u Bllokua',
+        intro:
+          'Për shkak të shumë tentativave të dështuara, sistemi e ka bllokuar llogarinë për arsye sigurie.',
+        severity: 'danger',
+        items: [
+          { label: 'Lloji i aktivitetit', value: 'Bllokim automatik (shumë tentativa të dështuara)' },
+          { label: 'Username', value: user.username },
+          { label: 'Tentativa të dështuara', value: String(uAny.failedLoginCount) },
+          { label: 'Data / Ora', value: fmtDate(now) },
+          { label: 'Adresa IP', value: ip || '—' },
+          { label: 'Pajisja / Platforma', value: ua },
+        ],
+        footerNote: 'Rekomandohet ndërhyrje e administratorit për verifikim dhe riaktivizim sipas procedurave.',
+      });
+
+      await safeSendAdmin('NJOFTIM SIGURIE – Llogaria u Bllokua (Tentativa të Dështuara)', html);
 
       return res.status(423).json({
         code: 'USER_BLOCKED',
-        message:
-          'Ky përdorues u bllokua për shkak të shumë tentativave të dështuara. Kontaktoni ADMIN.',
+        message: 'Ky përdorues u bllokua për shkak të shumë tentativave të dështuara. Kontaktoni ADMIN.',
       });
     }
 
     return res.status(401).json({ code: 'INVALID_CREDENTIALS' });
   }
 
-  // kontrolli i kontratës
-  const now = new Date();
-
+  // 5) kontrollo kontratën
   if (!uAny.neverExpires) {
-    if (uAny.contractValidFrom && now < uAny.contractValidFrom) {
-      return res.status(403).json({
-        code: 'CONTRACT_NOT_ACTIVE_YET',
-        message: 'Ky përdorues nuk ka ende kontratë aktive.',
-      });
+    const now2 = new Date();
+    if (uAny.contractValidFrom && now2 < uAny.contractValidFrom) {
+      return res.status(403).json({ code: 'CONTRACT_NOT_ACTIVE_YET', message: 'Ky përdorues nuk ka ende kontratë aktive.' });
     }
-
-    if (uAny.contractValidTo && now > uAny.contractValidTo) {
-      return res.status(403).json({
-        code: 'CONTRACT_EXPIRED',
-        message: 'Kontrata e këtij përdoruesi ka skaduar.',
-      });
+    if (uAny.contractValidTo && now2 > uAny.contractValidTo) {
+      return res.status(403).json({ code: 'CONTRACT_EXPIRED', message: 'Kontrata e këtij përdoruesi ka skaduar.' });
     }
   }
 
-  // 4️⃣ Kontrollo IP të RE për këtë user (s’ka pasur login me këtë IP më herët)
+  // 6) IP e re? (audit)
   if (env.ADMIN_EMAIL) {
     try {
-      const existingFromThisIp = await LoginAudit.findOne({
-        userId: user._id,
-        ip,
-      }).lean();
-
+      const existingFromThisIp = await LoginAudit.findOne({ userId: user._id, ip }).lean();
       if (!existingFromThisIp) {
-        await sendSecurityAlert(
-          env.ADMIN_EMAIL,
-          'ℹ️ Kyçje nga IP e re',
-          `
-            <h2>Kyçje nga një IP e re për përdoruesin</h2>
-            <ul>
-              <li><b>Username:</b> ${user.username}</li>
-              <li><b>IP e re:</b> ${ip || 'e panjohur'}</li>
-              <li><b>Koha:</b> ${new Date().toLocaleString()}</li>
-            </ul>
-          `.trim()
-        );
+        const html = buildEmailHtml({
+          title: 'NJOFTIM ZYRTAR – Kyçje nga IP e Re',
+          intro:
+            'Ju njoftojmë se u regjistrua një kyçje nga një adresë IP e re për këtë llogari. Nëse kjo nuk është iniciuar nga ju, ndiqni udhëzimet e sigurisë.',
+          severity: 'info',
+          items: [
+            { label: 'Lloji i aktivitetit', value: 'Kyçje në sistem (IP e re)' },
+            { label: 'Username', value: user.username },
+            { label: 'Data / Ora', value: fmtDate(new Date()) },
+            { label: 'Adresa IP', value: ip || '—' },
+            { label: 'Pajisja / Platforma', value: ua },
+            { label: 'Njësia', value: user.unitId ? String(user.unitId) : '—' },
+          ],
+        });
+
+        await safeSendAdmin('NJOFTIM ZYRTAR – Kyçje nga IP e Re', html);
       }
     } catch (e) {
       console.error('❌ Dështoi kontrolli / emaili për IP të re:', e);
     }
   }
 
-  // NUK e ndalojmë login-in kur mustChangePassword = true.
-  // Frontend-i (Login.tsx) e lexon user.mustChangePassword dhe hap hapin 2 për ndryshim password-i.
-
-  // login i suksesshëm → reset statistikat
+  // 7) sukses → reset statistikat
   uAny.lastLogin = new Date();
   uAny.failedLoginCount = 0;
   uAny.lastFailedLoginAt = null;
   await user.save();
 
-  // përgatisim payload
   const payload: AuthUserPayload = {
     id: String(user._id),
     username: user.username,
@@ -319,14 +459,13 @@ r.post('/login', async (req, res) => {
       unitId: user.unitId ?? null,
       type: 'LOGIN',
       ip,
-      userAgent: req.headers['user-agent'] || '',
+      userAgent: ua,
     });
   } catch (e) {
     console.error('LoginAudit error (LOGIN):', e);
   }
 
-  // kthejmë edhe mustChangePassword + kontratën
-  res.json({
+  return res.json({
     token,
     user: {
       id: user._id,
@@ -357,7 +496,7 @@ r.post('/logout', requireAuth, async (req: any, res) => {
         unitId: user.unitId ?? null,
         type: 'LOGOUT',
         ip: getClientIp(req),
-        userAgent: req.headers['user-agent'] || '',
+        userAgent: pickUserAgent(req),
       });
     } catch (e) {
       console.error('LoginAudit error (LOGOUT):', e);
@@ -376,20 +515,16 @@ r.post('/change-password', requireAuth, async (req: any, res) => {
   const { currentPassword, newPassword } = req.body ?? {};
 
   if (!currentPassword || !newPassword) {
-    return res.status(400).json({
-      code: 'VALIDATION_ERROR',
-      message: 'currentPassword & newPassword required',
-    });
+    return res.status(400).json({ code: 'VALIDATION_ERROR', message: 'currentPassword & newPassword required' });
   }
 
   const user = await User.findById(me.id);
   if (!user) return res.status(404).json({ code: 'NOT_FOUND' });
 
-  const ok = await argon2.verify(user.passwordHash, currentPassword);
+  const ok = await verifyPassword(String(user.passwordHash), String(currentPassword));
   if (!ok) return res.status(401).json({ code: 'INVALID_CURRENT_PASSWORD' });
 
-  // ❗ MOS LEJO FJALËKALIM TË RI TË NJËJTË ME TË VJETRIN
-  const sameAsOld = await argon2.verify(user.passwordHash, newPassword);
+  const sameAsOld = await verifyPassword(String(user.passwordHash), String(newPassword));
   if (sameAsOld) {
     return res.status(400).json({
       code: 'PASSWORD_REUSE_NOT_ALLOWED',
@@ -397,11 +532,10 @@ r.post('/change-password', requireAuth, async (req: any, res) => {
     });
   }
 
-  user.passwordHash = await argon2.hash(newPassword);
+  user.passwordHash = await argon2.hash(String(newPassword));
   (user as any).mustChangePassword = false;
 
   await user.save();
-
   return res.json({ ok: true });
 });
 
@@ -409,51 +543,43 @@ r.post('/change-password', requireAuth, async (req: any, res) => {
    CHANGE PASSWORD FIRST LOGIN (pa token)
 ===================== */
 
-/**
- * POST /api/auth/change-password-first
- * Body: { username: string, oldPassword: string, newPassword: string }
- *
- * Për user-at e rinj/ të resetuar që kanë mustChangePassword = true.
- */
 r.post('/change-password-first', async (req, res) => {
   const { username, oldPassword, newPassword } = req.body ?? {};
 
-  if (!username || !oldPassword || !newPassword) {
+  const uName = String(username ?? '').trim();
+  const oldPw = String(oldPassword ?? '');
+  const newPw = String(newPassword ?? '');
+
+  if (!uName || !oldPw || !newPw) {
     return res.status(400).json({
       code: 'VALIDATION_ERROR',
       message: 'username, oldPassword & newPassword required',
     });
   }
 
-  const user = await User.findOne({ username });
+  let user = await User.findOne({ username: uName }).exec();
   if (!user) {
-    // mos zbulo shumë – njësoj si invalid credentials
-    return res.status(401).json({ code: 'INVALID_CREDENTIALS' });
+    user = await User.findOne({ username: new RegExp(`^${escapeRegExp(uName)}$`, 'i') }).exec();
   }
+  if (!user) return res.status(401).json({ code: 'INVALID_CREDENTIALS' });
 
   const uAny: any = user;
 
-  // nëse është i bllokuar, mos lejo
   if (uAny.isBlocked) {
     return res.status(423).json({
       code: 'USER_BLOCKED',
-      message:
-        uAny.blockReason ||
-        'Ky përdorues është bllokuar. Ju lutem kontaktoni administratorin.',
+      message: uAny.blockReason || 'Ky përdorues është bllokuar. Ju lutem kontaktoni administratorin.',
     });
   }
 
-  // duhet realisht të ketë mustChangePassword = true
   if (!uAny.mustChangePassword) {
     return res.status(400).json({
       code: 'NOT_REQUIRED',
-      message:
-        'Ky përdorues nuk e ka të shënuar që duhet ta ndryshojë fjalëkalimin në hyrjen e parë.',
+      message: 'Ky përdorues nuk e ka të shënuar që duhet ta ndryshojë fjalëkalimin në hyrjen e parë.',
     });
   }
 
-  // verifiko password-in e vjetër (atë që ia ka dhënë admini)
-  const okOld = await argon2.verify(user.passwordHash, oldPassword);
+  const okOld = await verifyPassword(String(user.passwordHash), oldPw);
   if (!okOld) {
     return res.status(401).json({
       code: 'INVALID_OLD_PASSWORD',
@@ -461,8 +587,7 @@ r.post('/change-password-first', async (req, res) => {
     });
   }
 
-  // ❗ MOS LEJO ME PËRDOR TË NJËJTIN PASSWORD QË KA DHËNË ADMINI
-  const sameAsOld = await argon2.verify(user.passwordHash, newPassword);
+  const sameAsOld = await verifyPassword(String(user.passwordHash), newPw);
   if (sameAsOld) {
     return res.status(400).json({
       code: 'PASSWORD_REUSE_NOT_ALLOWED',
@@ -471,33 +596,23 @@ r.post('/change-password-first', async (req, res) => {
     });
   }
 
-  // opsionale: mundesh me kontrollu edhe kontratën këtu
+  // kontrata (opsionale)
   const now = new Date();
-
   if (!uAny.neverExpires) {
     if (uAny.contractValidFrom && now < uAny.contractValidFrom) {
-      return res.status(403).json({
-        code: 'CONTRACT_NOT_ACTIVE_YET',
-        message: 'Ky përdorues nuk ka ende kontratë aktive.',
-      });
+      return res.status(403).json({ code: 'CONTRACT_NOT_ACTIVE_YET', message: 'Ky përdorues nuk ka ende kontratë aktive.' });
     }
-
     if (uAny.contractValidTo && now > uAny.contractValidTo) {
-      return res.status(403).json({
-        code: 'CONTRACT_EXPIRED',
-        message: 'Kontrata e këtij përdoruesi ka skaduar.',
-      });
+      return res.status(403).json({ code: 'CONTRACT_EXPIRED', message: 'Kontrata e këtij përdoruesi ka skaduar.' });
     }
   }
 
-  // vendos password-in e ri, hiq mustChangePassword
-  user.passwordHash = await argon2.hash(newPassword);
+  user.passwordHash = await argon2.hash(newPw);
   uAny.mustChangePassword = false;
   uAny.failedLoginCount = 0;
   uAny.lastFailedLoginAt = null;
 
   await user.save();
-
   return res.json({ ok: true });
 });
 
@@ -505,76 +620,63 @@ r.post('/change-password-first', async (req, res) => {
       REGISTER (ADMIN)
 ===================== */
 
-r.post(
-  '/register',
-  requireAuth,
-  requireRole('ADMIN'),
-  async (req, res) => {
-    const {
-      username,
-      password,
-      role,
-      unitId,
-      contractValidFrom,
-      contractValidTo,
-      neverExpires,
-      mustChangePassword,
-    } = req.body ?? {};
+r.post('/register', requireAuth, requireRole('ADMIN'), async (req, res) => {
+  const { username, password, role, unitId, contractValidFrom, contractValidTo, neverExpires, mustChangePassword } =
+    req.body ?? {};
 
-    if (!username || !password || !role) {
-      return res.status(400).json({
-        code: 'VALIDATION_ERROR',
-        message: 'username, password & role required',
-      });
-    }
+  const uName = String(username ?? '').trim();
+  const pw = String(password ?? '');
+  const rRole = String(role ?? '').trim();
 
-    const exists = await User.findOne({ username });
-    if (exists) return res.status(409).json({ code: 'USERNAME_EXISTS' });
-
-    const passwordHash = await argon2.hash(password);
-
-    // kontrata
-    let contractFromDate: Date | null = null;
-    let contractToDate: Date | null = null;
-    let neverExp = true;
-
-    if (typeof neverExpires === 'boolean') {
-      neverExp = neverExpires;
-    }
-
-    if (contractValidFrom) {
-      const d = new Date(contractValidFrom);
-      if (!isNaN(d.getTime())) contractFromDate = d;
-    }
-
-    if (contractValidTo) {
-      const d = new Date(contractValidTo);
-      if (!isNaN(d.getTime())) contractToDate = d;
-    }
-
-    // krijojmë user-in
-    const u: any = await User.create({
-      username,
-      passwordHash,
-      role,
-      unitId: unitId || null,
-      isBlocked: false,
-      blockReason: '',
-      failedLoginCount: 0,
-      lastFailedLoginAt: null,
-      contractValidFrom: contractFromDate,
-      contractValidTo: contractToDate,
-      neverExpires: neverExp,
-      mustChangePassword: !!mustChangePassword,
-    });
-
-    res.status(201).json({
-      id: u._id,
-      username: u.username,
-      role: u.role,
-      unitId: u.unitId ?? null,
-    });
+  if (!uName || !pw || !rRole) {
+    return res.status(400).json({ code: 'VALIDATION_ERROR', message: 'username, password & role required' });
   }
-);
+
+  const exists = await User.findOne({ username: uName });
+  if (exists) return res.status(409).json({ code: 'USERNAME_EXISTS' });
+
+  const passwordHash = await argon2.hash(pw);
+
+  let contractFromDate: Date | null = null;
+  let contractToDate: Date | null = null;
+  let neverExp = true;
+
+  if (typeof neverExpires === 'boolean') neverExp = neverExpires;
+
+  if (contractValidFrom) {
+    const d = new Date(contractValidFrom);
+    if (!isNaN(d.getTime())) contractFromDate = d;
+  }
+
+  if (contractValidTo) {
+    const d = new Date(contractValidTo);
+    if (!isNaN(d.getTime())) contractToDate = d;
+  }
+
+  const unitObj =
+    unitId && Types.ObjectId.isValid(String(unitId)) ? new Types.ObjectId(String(unitId)) : null;
+
+  const u: any = await User.create({
+    username: uName,
+    passwordHash,
+    role: rRole,
+    unitId: unitObj,
+    isBlocked: false,
+    blockReason: '',
+    failedLoginCount: 0,
+    lastFailedLoginAt: null,
+    contractValidFrom: neverExp ? null : contractFromDate,
+    contractValidTo: neverExp ? null : contractToDate,
+    neverExpires: neverExp,
+    mustChangePassword: !!mustChangePassword,
+  });
+
+  return res.status(201).json({
+    id: u._id,
+    username: u.username,
+    role: u.role,
+    unitId: u.unitId ?? null,
+  });
+});
 
 export default r;
