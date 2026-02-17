@@ -8,6 +8,9 @@
     "module": "ES2022",
     "moduleResolution": "Bundler",
     "jsx": "react-jsx",
+    "types": [
+      "vite/client"
+    ],
     "baseUrl": ".",
     "paths": {
       "@/*": [

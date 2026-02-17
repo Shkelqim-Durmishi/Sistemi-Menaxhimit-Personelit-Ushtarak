@@ -1,4 +1,5 @@
 // src/lib/api.ts
+
 import axios from 'axios';
 
 /* =========================
@@ -10,14 +11,19 @@ const API_BASE = (import.meta as any).env?.VITE_API_URL || 'http://localhost:400
 // Origin pa "/api" (për /uploads/...)
 function getApiOrigin() {
     // heq /api në fund nëse ekziston
-    return API_BASE.replace(/\/api\/?$/, '');
+    return String(API_BASE).replace(/\/api\/?$/, '');
 }
 
 // nëse photoUrl vjen si "/uploads/people/xxx.jpg" e kthen absolute
 export function toPublicUrl(maybePath?: string | null) {
     if (!maybePath) return null;
+
     if (/^https?:\/\//i.test(maybePath)) return maybePath; // tashmë absolute
+
+    // ✅ edhe pa "/" në fillim
     if (maybePath.startsWith('/uploads/')) return `${getApiOrigin()}${maybePath}`;
+    if (maybePath.startsWith('uploads/')) return `${getApiOrigin()}/${maybePath}`;
+
     return maybePath;
 }
 
@@ -29,6 +35,27 @@ export const api = axios.create({
     baseURL: API_BASE,
     withCredentials: true,
 });
+
+/* ====== Optional: auto logout on 401 (token expired) ======
+   Nëse s’e do, fshije këtë interceptor.
+*/
+api.interceptors.response.use(
+    (res) => res,
+    (err) => {
+        const status = err?.response?.status;
+        if (status === 401) {
+            // token invalid/expired -> pastro storage
+            try {
+                localStorage.removeItem('token');
+                localStorage.removeItem('currentUser');
+            } catch { }
+            try {
+                delete api.defaults.headers.common['Authorization'];
+            } catch { }
+        }
+        return Promise.reject(err);
+    }
+);
 
 /* ====== Types ====== */
 
@@ -534,14 +561,15 @@ export async function listLoginAudit(params?: {
 // ✅ Shtuam ARCHIVE për tab-in "Arkiv" (backend e kupton si special filter)
 export type RequestStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED' | 'ARCHIVE';
 
-// ✅ Backend types + UPDATE_PERSON (kërkesë për ndryshim të dhënave)
+// ✅ Shtuam CREATE_USER që të jetë type-safe edhe në Requests.tsx
 export type RequestAction =
     | 'DELETE_PERSON'
     | 'TRANSFER_PERSON'
     | 'CHANGE_GRADE'
     | 'CHANGE_UNIT'
     | 'DEACTIVATE_PERSON'
-    | 'UPDATE_PERSON';
+    | 'UPDATE_PERSON'
+    | 'CREATE_USER';
 
 export interface RequestItem {
     // backend zakonisht kthen _id; në UI mund të përdorësh id ose _id
@@ -586,12 +614,7 @@ export async function listMyRequests(params?: { page?: number; limit?: number; s
 }
 
 // Incoming për COMMANDER (unit + children), ADMIN, AUDITOR
-export async function listIncomingRequests(params?: {
-    page?: number;
-    limit?: number;
-    status?: RequestStatus;
-    type?: RequestAction;
-}) {
+export async function listIncomingRequests(params?: { page?: number; limit?: number; status?: RequestStatus; type?: RequestAction }) {
     const { page = 1, limit = 50, status, type } = params ?? {};
     const { data } = await api.get('/requests/incoming', { params: { page, limit, status, type } });
     return data as RequestPage;
@@ -629,11 +652,16 @@ export async function cancelRequest(id: string, note = '') {
  * - e përdor kur do me e hap PDF direkt me link/window.open
  * - kërkon që backend-i ta lexojë token-in edhe nga query: req.query.auth
  */
-export function requestPdfUrl(id: string) {
+export function requestPdfUrl(id: string, opts?: { download?: boolean }) {
     const base = (import.meta as any).env?.VITE_API_URL || 'http://localhost:4000/api';
     const token = localStorage.getItem('token');
-    const q = token ? `?auth=${encodeURIComponent(token)}` : '';
-    return `${base}/requests/${id}/pdf${q}`;
+
+    const params = new URLSearchParams();
+    if (token) params.set('auth', token);
+    if (opts?.download) params.set('download', '1');
+
+    const qs = params.toString();
+    return `${base}/requests/${id}/pdf${qs ? `?${qs}` : ''}`;
 }
 
 /**

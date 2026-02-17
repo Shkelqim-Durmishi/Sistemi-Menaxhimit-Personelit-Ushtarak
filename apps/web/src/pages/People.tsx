@@ -24,18 +24,14 @@ function reqLabel(text: string) {
 }
 
 function statusBadge(status?: PersonStatus) {
-    if (status === 'PENDING') {
+    if (status === 'PENDING')
         return <span className="px-2 py-0.5 rounded bg-yellow-100 text-yellow-800 text-xs">PENDING</span>;
-    }
-    if (status === 'ACTIVE') {
+    if (status === 'ACTIVE')
         return <span className="px-2 py-0.5 rounded bg-green-100 text-green-800 text-xs">ACTIVE</span>;
-    }
-    if (status === 'INACTIVE') {
+    if (status === 'INACTIVE')
         return <span className="px-2 py-0.5 rounded bg-gray-100 text-gray-800 text-xs">INACTIVE</span>;
-    }
-    if (status === 'REJECTED') {
+    if (status === 'REJECTED')
         return <span className="px-2 py-0.5 rounded bg-red-100 text-red-800 text-xs">REJECTED</span>;
-    }
     return <span className="text-xs text-gray-400">—</span>;
 }
 
@@ -61,13 +57,20 @@ type PersonListItemEx = PersonListItem & {
     gradeId?: string | null;
 
     notes?: string | null;
-    photoUrl?: string | null; // ✅ nga api.ts tani mund të vijë absolute
+    photoUrl?: string | null; // ✅ absolute ose dataURL
 };
 
 export default function PeoplePage() {
     // ✅ URL Search Params
     const [sp, setSp] = useSearchParams();
     const qParam = sp.get('q') ?? '';
+
+    // ✅ UI: toggle forma
+    const [showCreate, setShowCreate] = useState(false);
+
+    // ✅ refs për scroll
+    const listTopRef = useRef<HTMLDivElement | null>(null);
+    const createTopRef = useRef<HTMLDivElement | null>(null);
 
     // 🔹 Forma (CREATE)
     const [serviceNo, setServiceNo] = useState('');
@@ -87,7 +90,7 @@ export default function PeoplePage() {
 
     // Foto si FILE → base64
     const [photoFile, setPhotoFile] = useState<File | null>(null);
-    const [photoUrl, setPhotoUrl] = useState<string>(''); // dataURL ose URL
+    const [photoUrl, setPhotoUrl] = useState<string>(''); // dataURL
     const [photoPreview, setPhotoPreview] = useState<string>('');
 
     // opsionale
@@ -197,7 +200,7 @@ export default function PeoplePage() {
         };
     }, [reasonOpen]);
 
-    // ✅ API për update/resubmit (përdor axios instance nga lib/api.ts)
+    // ✅ API për update/resubmit
     async function updatePersonApi(id: string, payload: any) {
         const { data } = await api.put(`/people/${id}`, payload);
         return data;
@@ -224,7 +227,6 @@ export default function PeoplePage() {
         const t = setTimeout(() => {
             const clean = q.trim();
             const current = sp.get('q') ?? '';
-
             if (clean === current) return;
 
             setSp((prev) => {
@@ -259,6 +261,7 @@ export default function PeoplePage() {
         }
 
         load();
+
         return () => {
             active = false;
         };
@@ -272,9 +275,10 @@ export default function PeoplePage() {
 
         if (!file) return;
 
-        const okTypes = ['image/png', 'image/jpeg'];
+        // ✅ vetëm PNG
+        const okTypes = ['image/png'];
         if (!okTypes.includes(file.type)) {
-            alert('Lejohen vetëm PNG ose JPEG.');
+            alert('Lejohet vetëm PNG.');
             setPhotoFile(null);
             return;
         }
@@ -303,9 +307,9 @@ export default function PeoplePage() {
         setEditPhotoUrl('');
         if (!file) return;
 
-        const okTypes = ['image/png', 'image/jpeg'];
+        const okTypes = ['image/png'];
         if (!okTypes.includes(file.type)) {
-            alert('Lejohen vetëm PNG ose JPEG.');
+            alert('Lejohet vetëm PNG.');
             setEditPhotoFile(null);
             return;
         }
@@ -347,6 +351,9 @@ export default function PeoplePage() {
         if (!position.trim()) missing.push('Pozita');
         if (!serviceStartDate.trim()) missing.push('Data e fillimit të shërbimit');
 
+        // ✅ FOTO REQUIRED
+        if (!photoUrl) missing.push('Foto (PNG)');
+
         if (missing.length) {
             alert('Plotëso fushat e detyrueshme:\n- ' + missing.join('\n- '));
             return false;
@@ -373,6 +380,9 @@ export default function PeoplePage() {
         if (!editPhone.trim()) missing.push('Telefoni');
         if (!editPosition.trim()) missing.push('Pozita');
         if (!editServiceStartDate.trim()) missing.push('Data e fillimit të shërbimit');
+
+        // ✅ Foto e detyrueshme: ose ekzistuese, ose e re
+        if (!(editPhotoPreview || editPhotoUrl)) missing.push('Foto (PNG)');
 
         if (missing.length) {
             alert('Plotëso fushat e detyrueshme:\n- ' + missing.join('\n- '));
@@ -406,12 +416,15 @@ export default function PeoplePage() {
                 position: position.trim(),
                 serviceStartDate,
 
-                photoUrl: photoUrl ? photoUrl : null,
+                // ✅ required
+                photoUrl: photoUrl,
+
                 notes: notes?.trim() ? notes.trim() : null,
             });
 
             alert('Ushtari u regjistrua me sukses. Statusi fillestar: PENDING.');
 
+            // ✅ pastro fushat, por MOS e mbyll formën
             setServiceNo('');
             setFirstName('');
             setLastName('');
@@ -432,12 +445,16 @@ export default function PeoplePage() {
             setPhotoUrl('');
             setPhotoPreview('');
 
+            // ✅ rifresko listën (faqja 1)
             setPage(1);
-
-            // ✅ rifresko listën me query nga URL (qParam)
             const data = await searchPeople(qParam, 1, 10);
             setPeople((data.items as any) as PersonListItemEx[]);
             setTotalPages(data.pages ?? 1);
+
+            // ✅ scroll te lista (që ta shohësh menjëherë)
+            requestAnimationFrame(() => {
+                listTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            });
         } catch (err: any) {
             console.error('createPerson error', err);
 
@@ -512,7 +529,9 @@ export default function PeoplePage() {
                 position: editPosition.trim(),
                 serviceStartDate: editServiceStartDate,
 
-                photoUrl: editPhotoUrl ? editPhotoUrl : null,
+                // ✅ nëse zgjedh foto të re, dërgo dataURL, përndryshe mos e prish ekzistuesen
+                photoUrl: editPhotoUrl ? editPhotoUrl : undefined,
+
                 notes: editNotes?.trim() ? editNotes.trim() : null,
             });
 
@@ -552,7 +571,7 @@ export default function PeoplePage() {
                 position: editPosition.trim(),
                 serviceStartDate: editServiceStartDate,
 
-                photoUrl: editPhotoUrl ? editPhotoUrl : null,
+                photoUrl: editPhotoUrl ? editPhotoUrl : undefined,
                 notes: editNotes?.trim() ? editNotes.trim() : null,
             });
 
@@ -780,38 +799,22 @@ export default function PeoplePage() {
 
                                         <div>
                                             <label>{reqLabel('Qyteti')}</label>
-                                            <input
-                                                value={editCity}
-                                                onChange={(e) => setEditCity(e.target.value)}
-                                                className="border px-2 py-1 rounded w-full"
-                                            />
+                                            <input value={editCity} onChange={(e) => setEditCity(e.target.value)} className="border px-2 py-1 rounded w-full" />
                                         </div>
 
                                         <div>
                                             <label>{reqLabel('Adresa')}</label>
-                                            <input
-                                                value={editAddress}
-                                                onChange={(e) => setEditAddress(e.target.value)}
-                                                className="border px-2 py-1 rounded w-full"
-                                            />
+                                            <input value={editAddress} onChange={(e) => setEditAddress(e.target.value)} className="border px-2 py-1 rounded w-full" />
                                         </div>
 
                                         <div>
                                             <label>{reqLabel('Telefoni')}</label>
-                                            <input
-                                                value={editPhone}
-                                                onChange={(e) => setEditPhone(e.target.value)}
-                                                className="border px-2 py-1 rounded w-full"
-                                            />
+                                            <input value={editPhone} onChange={(e) => setEditPhone(e.target.value)} className="border px-2 py-1 rounded w-full" />
                                         </div>
 
                                         <div>
                                             <label>{reqLabel('Pozita')}</label>
-                                            <input
-                                                value={editPosition}
-                                                onChange={(e) => setEditPosition(e.target.value)}
-                                                className="border px-2 py-1 rounded w-full"
-                                            />
+                                            <input value={editPosition} onChange={(e) => setEditPosition(e.target.value)} className="border px-2 py-1 rounded w-full" />
                                         </div>
 
                                         <div>
@@ -825,33 +828,26 @@ export default function PeoplePage() {
                                         </div>
 
                                         <div>
-                                            <label className="text-sm">Foto (opsionale)</label>
+                                            <label className="text-sm">
+                                                Foto (PNG) <span className="text-red-600">*</span>
+                                            </label>
                                             <input
                                                 type="file"
-                                                accept="image/png,image/jpeg"
+                                                accept="image/png"
                                                 onChange={(e) => handleEditPhotoPick(e.target.files?.[0] ?? null)}
                                                 className="border px-2 py-1 rounded w-full bg-white"
                                             />
 
                                             {(editPhotoPreview || editPhotoUrl) && (
                                                 <div className="mt-2">
-                                                    <img
-                                                        src={editPhotoPreview || editPhotoUrl}
-                                                        alt="preview"
-                                                        className="h-16 w-16 rounded object-cover border"
-                                                    />
+                                                    <img src={editPhotoPreview || editPhotoUrl} alt="preview" className="h-16 w-16 rounded object-cover border" />
                                                 </div>
                                             )}
                                         </div>
 
                                         <div className="md:col-span-3">
                                             <label className="text-sm">Shënime / Vërejtje (opsionale)</label>
-                                            <textarea
-                                                value={editNotes}
-                                                onChange={(e) => setEditNotes(e.target.value)}
-                                                className="border px-2 py-1 rounded w-full"
-                                                rows={2}
-                                            />
+                                            <textarea value={editNotes} onChange={(e) => setEditNotes(e.target.value)} className="border px-2 py-1 rounded w-full" rows={2} />
                                         </div>
                                     </div>
 
@@ -887,151 +883,186 @@ export default function PeoplePage() {
             )
             : null;
 
+    function openCreate() {
+        setShowCreate(true);
+        requestAnimationFrame(() => {
+            createTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+    }
+
+    function closeCreate() {
+        setShowCreate(false);
+        requestAnimationFrame(() => {
+            listTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+    }
+
     return (
         <div className="space-y-6">
-            <h1 className="text-2xl font-semibold">Ushtarët</h1>
+            {/* ✅ HEADER: titulli + butoni "Krijo Ushtar" lart */}
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                <h1 className="text-2xl font-semibold">Ushtarët</h1>
 
-            {/* ========== Forma ========== */}
-            <form onSubmit={handleCreatePerson} className="bg-white p-4 rounded shadow space-y-3">
-                <div className="grid md:grid-cols-3 gap-3">
-                    <div>
-                        <label>{reqLabel('Nr. Shërbimit')}</label>
-                        <input
-                            value={serviceNo}
-                            onChange={(e) => setServiceNo(e.target.value)}
-                            className="border px-2 py-1 rounded w-full"
-                            placeholder="p.sh. 10001"
-                        />
+                <button
+                    type="button"
+                    onClick={showCreate ? closeCreate : openCreate}
+                    className="px-4 py-2 rounded bg-green-700 text-white hover:bg-green-800 w-full md:w-auto"
+                >
+                    {showCreate ? 'Mbyll formën' : 'Krijo Ushtar'}
+                </button>
+            </div>
+
+            {/* ✅ FORMA TANI ËSHTË E PARA (sipër listës) */}
+            {showCreate && (
+                <div ref={createTopRef} className="bg-white p-4 rounded shadow space-y-3">
+                    <div className="flex items-center justify-between">
+                        <h2 className="font-medium">Regjistro një ushtar</h2>
+
+                        <button type="button" className="px-3 py-2 rounded border bg-white hover:bg-gray-50" onClick={closeCreate}>
+                            Mbyll
+                        </button>
                     </div>
 
-                    <div>
-                        <label>{reqLabel('Emri')}</label>
-                        <input value={firstName} onChange={(e) => setFirstName(e.target.value)} className="border px-2 py-1 rounded w-full" />
-                    </div>
-
-                    <div>
-                        <label>{reqLabel('Mbiemri')}</label>
-                        <input value={lastName} onChange={(e) => setLastName(e.target.value)} className="border px-2 py-1 rounded w-full" />
-                    </div>
-
-                    <div>
-                        <label>{reqLabel('Grada (ID)')}</label>
-                        <input
-                            value={gradeId}
-                            onChange={(e) => setGradeId(e.target.value)}
-                            className="border px-2 py-1 rounded w-full"
-                            placeholder="p.sh. 12121 ose OF-1"
-                        />
-                    </div>
-
-                    <div>
-                        <label>{reqLabel('Njësia')}</label>
-                        <select value={unitId} onChange={(e) => setUnitId(e.target.value)} className="border px-2 py-1 rounded w-full">
-                            <option value="">— Zgjidh njësinë —</option>
-                            {units.map((u) => (
-                                <option key={u.id} value={u.id}>
-                                    {u.code} — {u.name}
-                                </option>
-                            ))}
-                        </select>
-                    </div>
-
-                    <div>
-                        <label>{reqLabel('Nr. Personal')}</label>
-                        <input
-                            value={personalNumber}
-                            onChange={(e) => setPersonalNumber(e.target.value)}
-                            className="border px-2 py-1 rounded w-full"
-                            placeholder="p.sh. 1244088693"
-                        />
-                    </div>
-
-                    <div>
-                        <label>{reqLabel('Data e lindjes')}</label>
-                        <input type="date" value={birthDate} onChange={(e) => setBirthDate(e.target.value)} className="border px-2 py-1 rounded w-full" />
-                    </div>
-
-                    <div>
-                        <label>{reqLabel('Gjinia')}</label>
-                        <select value={gender} onChange={(e) => setGender(e.target.value as any)} className="border px-2 py-1 rounded w-full">
-                            <option value="">— Zgjidh —</option>
-                            <option value="M">Mashkull</option>
-                            <option value="F">Femër</option>
-                            <option value="O">Tjetër</option>
-                        </select>
-                    </div>
-
-                    <div>
-                        <label>{reqLabel('Qyteti')}</label>
-                        <input value={city} onChange={(e) => setCity(e.target.value)} className="border px-2 py-1 rounded w-full" placeholder="p.sh. Mitrovicë" />
-                    </div>
-
-                    <div>
-                        <label>{reqLabel('Adresa')}</label>
-                        <input value={address} onChange={(e) => setAddress(e.target.value)} className="border px-2 py-1 rounded w-full" />
-                    </div>
-
-                    <div>
-                        <label>{reqLabel('Telefoni')}</label>
-                        <input value={phone} onChange={(e) => setPhone(e.target.value)} className="border px-2 py-1 rounded w-full" placeholder="p.sh. 049..." />
-                    </div>
-
-                    <div>
-                        <label>{reqLabel('Pozita')}</label>
-                        <input value={position} onChange={(e) => setPosition(e.target.value)} className="border px-2 py-1 rounded w-full" placeholder="p.sh. Operator, Shofer…" />
-                    </div>
-
-                    <div>
-                        <label>{reqLabel('Data e fillimit të shërbimit')}</label>
-                        <input
-                            type="date"
-                            value={serviceStartDate}
-                            onChange={(e) => setServiceStartDate(e.target.value)}
-                            className="border px-2 py-1 rounded w-full"
-                        />
-                    </div>
-
-                    <div>
-                        <label className="text-sm">Foto (PNG/JPEG) (opsionale)</label>
-                        <input
-                            type="file"
-                            accept="image/png,image/jpeg"
-                            onChange={(e) => handlePhotoPick(e.target.files?.[0] ?? null)}
-                            className="border px-2 py-1 rounded w-full bg-white"
-                        />
-                        {photoPreview && (
-                            <div className="mt-2">
-                                <img src={photoPreview} alt="preview" className="h-16 w-16 rounded object-cover border" />
+                    <form onSubmit={handleCreatePerson} className="space-y-3">
+                        <div className="grid md:grid-cols-3 gap-3">
+                            <div>
+                                <label>{reqLabel('Nr. Shërbimit')}</label>
+                                <input
+                                    value={serviceNo}
+                                    onChange={(e) => setServiceNo(e.target.value)}
+                                    className="border px-2 py-2 rounded w-full"
+                                    placeholder="p.sh. 10001"
+                                />
                             </div>
-                        )}
-                    </div>
 
-                    <div className="md:col-span-3">
-                        <label className="text-sm">Shënime / Vërejtje (opsionale)</label>
-                        <textarea
-                            value={notes}
-                            onChange={(e) => setNotes(e.target.value)}
-                            className="border px-2 py-1 rounded w-full"
-                            rows={2}
-                            placeholder="opsionale"
-                        />
-                    </div>
+                            <div>
+                                <label>{reqLabel('Emri')}</label>
+                                <input value={firstName} onChange={(e) => setFirstName(e.target.value)} className="border px-2 py-2 rounded w-full" />
+                            </div>
+
+                            <div>
+                                <label>{reqLabel('Mbiemri')}</label>
+                                <input value={lastName} onChange={(e) => setLastName(e.target.value)} className="border px-2 py-2 rounded w-full" />
+                            </div>
+
+                            <div>
+                                <label>{reqLabel('Grada (ID)')}</label>
+                                <input
+                                    value={gradeId}
+                                    onChange={(e) => setGradeId(e.target.value)}
+                                    className="border px-2 py-2 rounded w-full"
+                                    placeholder="p.sh. 12121 ose OF-1"
+                                />
+                            </div>
+
+                            <div>
+                                <label>{reqLabel('Njësia')}</label>
+                                <select value={unitId} onChange={(e) => setUnitId(e.target.value)} className="border px-2 py-2 rounded w-full">
+                                    <option value="">— Zgjidh njësinë —</option>
+                                    {units.map((u) => (
+                                        <option key={u.id} value={u.id}>
+                                            {u.code} — {u.name}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div>
+                                <label>{reqLabel('Nr. Personal')}</label>
+                                <input
+                                    value={personalNumber}
+                                    onChange={(e) => setPersonalNumber(e.target.value)}
+                                    className="border px-2 py-2 rounded w-full"
+                                    placeholder="p.sh. 1244088693"
+                                />
+                            </div>
+
+                            <div>
+                                <label>{reqLabel('Data e lindjes')}</label>
+                                <input type="date" value={birthDate} onChange={(e) => setBirthDate(e.target.value)} className="border px-2 py-2 rounded w-full" />
+                            </div>
+
+                            <div>
+                                <label>{reqLabel('Gjinia')}</label>
+                                <select value={gender} onChange={(e) => setGender(e.target.value as any)} className="border px-2 py-2 rounded w-full">
+                                    <option value="">— Zgjidh —</option>
+                                    <option value="M">Mashkull</option>
+                                    <option value="F">Femër</option>
+                                    <option value="O">Tjetër</option>
+                                </select>
+                            </div>
+
+                            <div>
+                                <label>{reqLabel('Qyteti')}</label>
+                                <input value={city} onChange={(e) => setCity(e.target.value)} className="border px-2 py-2 rounded w-full" placeholder="p.sh. Mitrovicë" />
+                            </div>
+
+                            <div>
+                                <label>{reqLabel('Adresa')}</label>
+                                <input value={address} onChange={(e) => setAddress(e.target.value)} className="border px-2 py-2 rounded w-full" />
+                            </div>
+
+                            <div>
+                                <label>{reqLabel('Telefoni')}</label>
+                                <input value={phone} onChange={(e) => setPhone(e.target.value)} className="border px-2 py-2 rounded w-full" placeholder="p.sh. 049..." />
+                            </div>
+
+                            <div>
+                                <label>{reqLabel('Pozita')}</label>
+                                <input value={position} onChange={(e) => setPosition(e.target.value)} className="border px-2 py-2 rounded w-full" placeholder="p.sh. Operator, Shofer…" />
+                            </div>
+
+                            <div>
+                                <label>{reqLabel('Data e fillimit të shërbimit')}</label>
+                                <input type="date" value={serviceStartDate} onChange={(e) => setServiceStartDate(e.target.value)} className="border px-2 py-2 rounded w-full" />
+                            </div>
+
+                            <div>
+                                <label className="text-sm">
+                                    Foto (PNG) <span className="text-red-600">*</span>
+                                </label>
+                                <input
+                                    type="file"
+                                    accept="image/png"
+                                    onChange={(e) => handlePhotoPick(e.target.files?.[0] ?? null)}
+                                    className="border px-2 py-2 rounded w-full bg-white"
+                                />
+                                {photoPreview && (
+                                    <div className="mt-2">
+                                        <img src={photoPreview} alt="preview" className="h-16 w-16 rounded object-cover border" />
+                                    </div>
+                                )}
+                                <div className="text-xs text-gray-500 mt-1">Duhet të jetë PNG deri në 2MB.</div>
+                            </div>
+
+                            <div className="md:col-span-3">
+                                <label className="text-sm">Shënime / Vërejtje (opsionale)</label>
+                                <textarea
+                                    value={notes}
+                                    onChange={(e) => setNotes(e.target.value)}
+                                    className="border px-2 py-2 rounded w-full"
+                                    rows={2}
+                                    placeholder="opsionale"
+                                />
+                            </div>
+                        </div>
+
+                        <div className="flex gap-2">
+                            <button type="submit" disabled={saving} className="px-4 py-2 bg-green-700 text-white rounded disabled:opacity-50 hover:bg-green-800">
+                                {saving ? 'Duke ruajtur…' : 'Regjistro ushtarin'}
+                            </button>
+
+                            <button type="button" onClick={closeCreate} className="px-4 py-2 border rounded bg-white hover:bg-gray-50">
+                                Anulo
+                            </button>
+                        </div>
+                    </form>
                 </div>
+            )}
 
-                <div>
-                    <button
-                        type="submit"
-                        disabled={saving}
-                        className="px-3 py-2 bg-green-600 text-white rounded disabled:opacity-50"
-                    >
-                        {saving ? 'Duke ruajtur…' : 'Regjistro ushtarin'}
-                    </button>
-                </div>
-            </form>
-
-            {/* ========== Lista ========== */}
-            <div className="bg-white p-4 rounded shadow space-y-3">
-                <div className="flex justify-between items-center gap-3">
+            {/* ✅ LISTA TANI ËSHTË POSHTË FORMËS */}
+            <div ref={listTopRef} className="bg-white p-4 rounded shadow space-y-3">
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
                     <h2 className="font-medium">Lista e ushtarëve</h2>
 
                     <input
@@ -1041,52 +1072,54 @@ export default function PeoplePage() {
                             setPage(1);
                         }}
                         placeholder="Kërko sipas emrit / mbiemrit / nr. shërbimit…"
-                        className="border px-2 py-1 rounded w-64 max-w-full text-sm"
+                        className="border px-2 py-2 rounded w-full md:w-80 text-sm"
                     />
                 </div>
 
                 {(people?.length ?? 0) === 0 ? (
                     <div className="text-gray-500 text-sm">Nuk ka rezultat.</div>
                 ) : (
-                    <table className="w-full text-sm">
-                        <thead>
-                            <tr className="border-b text-left">
-                                <th className="py-2">Nr. Shërbimit</th>
-                                <th>Emri / Mbiemri</th>
-                                <th>Statusi</th>
-                                <th>Qyteti</th>
-                            </tr>
-                        </thead>
-
-                        <tbody>
-                            {people.map((p) => (
-                                <tr key={p._id} className="border-b">
-                                    <td className="py-1">{p.serviceNo}</td>
-                                    <td>
-                                        {p.firstName} {p.lastName}
-                                    </td>
-
-                                    <td>
-                                        <div className="flex items-center gap-2">
-                                            {statusBadge(p.status)}
-
-                                            {canSeeRejectReason(p) && (
-                                                <button
-                                                    type="button"
-                                                    onClick={() => openReasonModal(p)}
-                                                    className="px-2 py-1 rounded border text-xs bg-white hover:bg-gray-50"
-                                                >
-                                                    Shiko arsyen
-                                                </button>
-                                            )}
-                                        </div>
-                                    </td>
-
-                                    <td>{p.city ?? ''}</td>
+                    <div className="overflow-auto">
+                        <table className="w-full text-sm min-w-[720px]">
+                            <thead>
+                                <tr className="border-b text-left">
+                                    <th className="py-2">Nr. Shërbimit</th>
+                                    <th>Emri / Mbiemri</th>
+                                    <th>Statusi</th>
+                                    <th>Qyteti</th>
                                 </tr>
-                            ))}
-                        </tbody>
-                    </table>
+                            </thead>
+
+                            <tbody>
+                                {people.map((p) => (
+                                    <tr key={p._id} className="border-b">
+                                        <td className="py-2">{p.serviceNo}</td>
+                                        <td>
+                                            {p.firstName} {p.lastName}
+                                        </td>
+
+                                        <td>
+                                            <div className="flex items-center gap-2">
+                                                {statusBadge(p.status)}
+
+                                                {canSeeRejectReason(p) && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => openReasonModal(p)}
+                                                        className="px-2 py-1 rounded border text-xs bg-white hover:bg-gray-50"
+                                                    >
+                                                        Shiko arsyen
+                                                    </button>
+                                                )}
+                                            </div>
+                                        </td>
+
+                                        <td>{p.city ?? ''}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
                 )}
 
                 <div className="flex justify-end items-center gap-2 text-sm">

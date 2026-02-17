@@ -10,17 +10,34 @@ import crypto from 'node:crypto';
 
 import PDFDocument from 'pdfkit';
 
+import bcrypt from 'bcryptjs';
 import { requireAuth, requireRole, AuthUserPayload } from '../middleware/auth';
+
 import ChangeRequest from '../models/ChangeRequest';
 import Person from '../models/Person';
 import Unit from '../models/Unit';
+import User from '../models/User';
+
 import { getDescendantUnitIds } from '../lib/unitTree';
+import { sendNewUserCredentials } from '../utils/sendEmail';
 
 const r = Router();
 
 const isValidObjectId = (id: unknown) => typeof id === 'string' && Types.ObjectId.isValid(id);
 
-const allowedTypes = ['DELETE_PERSON', 'TRANSFER_PERSON', 'CHANGE_GRADE', 'CHANGE_UNIT', 'DEACTIVATE_PERSON', 'UPDATE_PERSON'] as const;
+/**
+ * ✅ Shtuam CREATE_USER
+ */
+const allowedTypes = [
+    'DELETE_PERSON',
+    'TRANSFER_PERSON',
+    'CHANGE_GRADE',
+    'CHANGE_UNIT',
+    'DEACTIVATE_PERSON',
+    'UPDATE_PERSON',
+    'CREATE_USER',
+] as const;
+
 type AllowedType = (typeof allowedTypes)[number];
 
 function pickAllowedPersonPatch(patch: any) {
@@ -82,6 +99,8 @@ function requestTypeLabel(t: string) {
             return 'Çaktivizim';
         case 'UPDATE_PERSON':
             return 'Përditësim të dhënash';
+        case 'CREATE_USER':
+            return 'Krijim përdoruesi';
         default:
             return t;
     }
@@ -157,9 +176,17 @@ function drawHeader(doc: PDFKit.PDFDocument, opts: { leftLogo?: string | null; r
     const midX = leftLogoX + logoW + 15;
     const midW = rightLogoX - 15 - midX;
 
-    doc.font('Times-Bold').fontSize(10).fillColor('#111').text('VETËM PËR PËRDORIM TË BRENDSHËM', midX, top + 5, { width: midW, align: 'center' });
+    doc
+        .font('Times-Bold')
+        .fontSize(10)
+        .fillColor('#111')
+        .text('VETËM PËR PËRDORIM TË BRENDSHËM', midX, top + 5, { width: midW, align: 'center' });
 
-    doc.font('Times-Roman').fontSize(13).fillColor('#111').text('Komanda e Forcave Tokësore', midX, top + 25, { width: midW, align: 'center' });
+    doc
+        .font('Times-Roman')
+        .fontSize(13)
+        .fillColor('#111')
+        .text('Komanda e Forcave Tokësore', midX, top + 25, { width: midW, align: 'center' });
 
     const lineY = top + 85;
     drawHR(doc, lineY);
@@ -193,6 +220,7 @@ function buildPersonLine(person: any, fallbackId: any) {
     const sn = safeText(person?.serviceNo);
     const fn = safeText(person?.firstName);
     const ln = safeText(person?.lastName);
+
     if (sn || fn || ln) return `${sn ? sn + ' — ' : ''}${fn} ${ln}`.trim();
     return safeText(fallbackId);
 }
@@ -267,20 +295,27 @@ async function generateRequestPdf(opts: {
     const personLine = buildPersonLine(personBefore, reqDoc.personId);
 
     const status = safeText(reqDoc.status);
-    const reason = safeText(reqDoc?.payload?.reason); // arsye operatori
-    const decisionNote = safeText(reqDoc.decisionNote); // arsye/shënim komandanti
+    const reason = safeText(reqDoc?.payload?.reason);
+    const decisionNote = safeText(reqDoc.decisionNote);
 
-    const patch = reqDoc?.payload?.meta?.patch && typeof reqDoc.payload.meta.patch === 'object' ? reqDoc.payload.meta.patch : null;
+    const patch =
+        reqDoc?.payload?.meta?.patch && typeof reqDoc.payload.meta.patch === 'object' ? reqDoc.payload.meta.patch : null;
 
     const docNo = safeText(reqDoc.docNo) || `REQ-${new Date().getFullYear()}-${String(reqDoc._id).slice(-6)}`;
 
-    const toUnitName = reqDoc?.payload?.toUnitId?.name
-        ? `${safeText(reqDoc.payload.toUnitId.code) ? safeText(reqDoc.payload.toUnitId.code) + ' — ' : ''}${safeText(reqDoc.payload.toUnitId.name)}`.trim()
-        : await getUnitName(reqDoc?.payload?.toUnitId);
+    const toUnitName =
+        reqDoc?.payload?.toUnitId?.name
+            ? `${safeText(reqDoc.payload.toUnitId.code) ? safeText(reqDoc.payload.toUnitId.code) + ' — ' : ''}${safeText(
+                reqDoc.payload.toUnitId.name
+            )}`.trim()
+            : await getUnitName(reqDoc?.payload?.toUnitId);
 
-    const fromUnitName = reqDoc?.targetUnitId?.name
-        ? `${safeText(reqDoc.targetUnitId.code) ? safeText(reqDoc.targetUnitId.code) + ' — ' : ''}${safeText(reqDoc.targetUnitId.name)}`.trim()
-        : await getUnitName(reqDoc?.targetUnitId);
+    const fromUnitName =
+        reqDoc?.targetUnitId?.name
+            ? `${safeText(reqDoc.targetUnitId.code) ? safeText(reqDoc.targetUnitId.code) + ' — ' : ''}${safeText(
+                reqDoc.targetUnitId.name
+            )}`.trim()
+            : await getUnitName(reqDoc?.targetUnitId);
 
     const newGrade = safeText(reqDoc?.payload?.newGradeId);
 
@@ -293,25 +328,19 @@ async function generateRequestPdf(opts: {
         const stream = fssync.createWriteStream(filePath);
         doc.pipe(stream);
 
-        // HEADER
         drawHeader(doc, { leftLogo: leftLogoPath, rightLogo: rightLogoPath });
-
-        // TITLE
         drawTitle(doc, 'Kërkesë – Vendim');
 
-        // META
         drawMetaBox(doc, {
             docNo,
             date: formatDate(reqDoc.decidedAt || reqDoc.updatedAt || reqDoc.createdAt),
         });
 
-        // BODY
         doc.font('Times-Roman').fontSize(11).fillColor('#111');
         doc.text(`Personi: ${personLine}`);
         doc.text(`Lloji i kërkesës: ${requestTypeLabel(String(reqDoc.type))}`);
         doc.moveDown(0.8);
 
-        // Decision paragraph
         if (status === 'APPROVED') {
             writeDecisionLine(
                 doc,
@@ -322,18 +351,12 @@ async function generateRequestPdf(opts: {
             writeDecisionLine(doc, 'REFUZOHET', `kërkesa për "${requestTypeLabel(String(reqDoc.type))}" për personin e lartcekur.`);
         }
 
-        /**
-         * ✅ RREGULLI I RI:
-         * - Arsyeja e operatorit (payload.reason) shfaqet VETËM kur statusi është PENDING
-         * - Kur APPROVED/REJECTED, mos e shfaq fare arsyen e operatorit
-         */
         if (status === 'PENDING' && reason) {
             doc.font('Times-Bold').fontSize(11).text('Arsyeja:');
             doc.font('Times-Roman').fontSize(11).text(reason, { align: 'justify', lineGap: 3 });
             doc.moveDown(0.8);
         }
 
-        // Per-type details
         if (reqDoc.type === 'CHANGE_UNIT' || reqDoc.type === 'TRANSFER_PERSON') {
             doc.font('Times-Bold').fontSize(11).text('Detaje:');
             doc.font('Times-Roman').fontSize(11);
@@ -357,7 +380,6 @@ async function generateRequestPdf(opts: {
             writeParagraph(doc, 'Personi fshihet nga sistemi sipas kërkesës së aprovuar.');
         }
 
-        // UPDATE_PERSON changes
         if (reqDoc.type === 'UPDATE_PERSON') {
             const keys = patch ? Object.keys(patch) : [];
             doc.font('Times-Bold').fontSize(11).text('Ndryshimet e kërkuara:');
@@ -375,17 +397,14 @@ async function generateRequestPdf(opts: {
                     doc.text(`• ${prettyFieldLabel(k)}: ${formatValue(oldVal)}  →  ${formatValue(finalNew)}`);
                 }
             }
-
             doc.moveDown(0.8);
         }
 
-        /**
-         * ✅ Decision note:
-         * - për REJECTED: shfaqet si "Arsyeja e refuzimit:"
-         * - për APPROVED/CANCELLED: opsionale "Shënim vendimi:"
-         */
         if (decisionNote) {
-            doc.font('Times-Bold').fontSize(11).text(status === 'REJECTED' ? 'Arsyeja e refuzimit:' : 'Shënim vendimi:');
+            doc
+                .font('Times-Bold')
+                .fontSize(11)
+                .text(status === 'REJECTED' ? 'Arsyeja e refuzimit:' : 'Shënim vendimi:');
             doc.font('Times-Roman').fontSize(11).text(decisionNote, { align: 'justify', lineGap: 3 });
             doc.moveDown(0.8);
         }
@@ -427,7 +446,10 @@ async function generateRequestPdf(opts: {
         doc.text(safeText(decidedBy.username) || '—', rightLineStartX, textY, { width: rightLineWidth, align: 'center' });
 
         doc.font('Times-Italic').fontSize(9);
-        doc.text(`(${safeText(decidedBy.role) || '—'})`, rightLineStartX, textY + 13, { width: rightLineWidth, align: 'center' });
+        doc.text(`(${safeText(decidedBy.role) || '—'})`, rightLineStartX, textY + 13, {
+            width: rightLineWidth,
+            align: 'center',
+        });
 
         doc.y = Math.max(doc.y, textY + 28);
 
@@ -470,15 +492,82 @@ async function canAccessRequest(me: AuthUserPayload, doc: any) {
    POST /api/requests (create)
    ========================================= */
 
-r.post('/', requireAuth, requireRole('OPERATOR', 'OFFICER', 'ADMIN'), async (req: any, res) => {
+r.post('/', requireAuth, requireRole('OPERATOR', 'OFFICER', 'ADMIN', 'COMMANDER'), async (req: any, res) => {
     const me = req.user as AuthUserPayload;
     const { type, personId, payload } = req.body ?? {};
-    if (!type || !personId) {
-        return res.status(400).json({ code: 'VALIDATION_ERROR', message: 'type & personId required' });
+
+    if (!type) {
+        return res.status(400).json({ code: 'VALIDATION_ERROR', message: 'type required' });
     }
 
     if (!allowedTypes.includes(String(type) as any)) {
         return res.status(400).json({ code: 'VALIDATION_ERROR', message: 'invalid type' });
+    }
+
+    const p: any = payload ?? {};
+
+    /**
+     * ✅ CREATE_USER: nuk kërkon personId
+     * - lejo vetëm COMMANDER ose ADMIN
+     */
+    if (String(type) === 'CREATE_USER') {
+        if (me.role !== 'COMMANDER' && me.role !== 'ADMIN') {
+            return res.status(403).json({ code: 'FORBIDDEN', message: 'Only COMMANDER/ADMIN can create CREATE_USER requests' });
+        }
+
+        const u = p?.user ?? {};
+        const username = String(u?.username ?? '').trim();
+        const email = String(u?.email ?? '').trim();
+        const role = String(u?.role ?? '').trim();
+
+        if (!username || !email || !role) {
+            return res.status(400).json({
+                code: 'VALIDATION_ERROR',
+                message: 'payload.user.username, payload.user.email, payload.user.role required',
+            });
+        }
+
+        // targetUnitId: zakonisht unit i komandantit; admin mundet me e lon null
+        const targetUnitId = me.unitId ? new Types.ObjectId(me.unitId) : null;
+
+        const doc = await ChangeRequest.create({
+            type: 'CREATE_USER',
+            status: 'PENDING',
+            createdBy: new Types.ObjectId(me.id),
+            createdByRole: me.role,
+            createdByUnitId: me.unitId ? new Types.ObjectId(me.unitId) : null,
+            personId: null,
+            targetUnitId,
+            payload: {
+                reason: p.reason ?? '',
+                user: {
+                    username,
+                    email,
+                    role,
+                    unitId: u?.unitId ?? (me.unitId ?? null),
+                    contractValidFrom: u?.contractValidFrom ?? null,
+                    contractValidTo: u?.contractValidTo ?? null,
+                    neverExpires: u?.neverExpires !== undefined ? !!u.neverExpires : true,
+                    mustChangePassword: u?.mustChangePassword !== undefined ? !!u.mustChangePassword : true,
+                },
+            },
+            docNo: '',
+            pdf: { path: '', generatedAt: null },
+        });
+
+        const out = await ChangeRequest.findById(doc._id)
+            .populate('targetUnitId', 'code name')
+            .populate('createdBy', 'username role unitId')
+            .lean();
+
+        return res.status(201).json(out);
+    }
+
+    /**
+     * ✅ Person requests: kërkojnë personId
+     */
+    if (!personId) {
+        return res.status(400).json({ code: 'VALIDATION_ERROR', message: 'personId required' });
     }
 
     if (!isValidObjectId(String(personId))) {
@@ -492,12 +581,11 @@ r.post('/', requireAuth, requireRole('OPERATOR', 'OFFICER', 'ADMIN'), async (req
 
     if (me.role !== 'ADMIN') {
         if (!me.unitId) return res.status(403).json({ code: 'FORBIDDEN', message: 'User has no unitId' });
+
         if (String(me.unitId) !== targetUnitId) {
             return res.status(403).json({ code: 'FORBIDDEN', message: 'Person is not in your unit' });
         }
     }
-
-    const p: any = payload ?? {};
 
     if ((type === 'TRANSFER_PERSON' || type === 'CHANGE_UNIT') && !p.toUnitId) {
         return res.status(400).json({ code: 'VALIDATION_ERROR', message: 'payload.toUnitId required' });
@@ -725,7 +813,6 @@ r.get('/:id/pdf', requireAuth, requireRole('COMMANDER', 'ADMIN', 'AUDITOR', 'OFF
     }
 
     const fileName = `request-${doc.docNo || String(doc._id)}.pdf`;
-
     const download = String(req.query.download ?? '') === '1' || String(req.query.download ?? '') === 'true';
 
     res.setHeader('Content-Type', 'application/pdf');
@@ -752,9 +839,118 @@ r.post('/:id/approve', requireAuth, requireRole('COMMANDER', 'ADMIN'), async (re
 
     if (me.role === 'COMMANDER') {
         if (!me.unitId) return res.status(403).json({ code: 'FORBIDDEN' });
+
         const unitIds = await getDescendantUnitIds(String(me.unitId));
         if (!unitIds.includes(String(doc.targetUnitId))) return res.status(403).json({ code: 'FORBIDDEN' });
     }
+
+    /**
+     * ✅ CREATE_USER: e krijon realisht user-in + dërgon email (ADMIN)
+     */
+    if (doc.type === 'CREATE_USER') {
+        if (me.role !== 'ADMIN') {
+            return res.status(403).json({ code: 'FORBIDDEN', message: 'Only ADMIN can approve CREATE_USER' });
+        }
+
+        const u = doc.payload?.user ?? {};
+        const username = String(u?.username ?? '').trim();
+        const email = String(u?.email ?? '').trim();
+        const role = String(u?.role ?? '').trim();
+        const unitIdRaw = u?.unitId ?? null;
+
+        if (!username || !email || !role) {
+            return res.status(400).json({
+                code: 'VALIDATION_ERROR',
+                message: 'payload.user.username, payload.user.email, payload.user.role required',
+            });
+        }
+
+        if (unitIdRaw && !Types.ObjectId.isValid(String(unitIdRaw))) {
+            return res.status(400).json({ code: 'VALIDATION_ERROR', message: 'payload.user.unitId invalid' });
+        }
+
+        const exists = await User.findOne({ username }).select('_id username').lean();
+        if (exists) {
+            return res.status(409).json({ code: 'USER_EXISTS', message: 'Username already exists' });
+        }
+
+        // ✅ gjenero password të përkohshëm + hash
+        const tempPassword = crypto.randomBytes(9).toString('base64url');
+        const passwordHash = await bcrypt.hash(tempPassword, 10);
+
+        const neverExpires = u?.neverExpires !== undefined ? !!u.neverExpires : true;
+        const contractValidFrom = u?.contractValidFrom ? new Date(u.contractValidFrom) : null;
+        const contractValidTo = u?.contractValidTo ? new Date(u.contractValidTo) : null;
+
+        // ✅ krijo user-in
+        const createdUser = await User.create({
+            username,
+            passwordHash,
+            role,
+            unitId: unitIdRaw ? new Types.ObjectId(String(unitIdRaw)) : null,
+            mustChangePassword: u?.mustChangePassword !== undefined ? !!u.mustChangePassword : true,
+            neverExpires,
+            contractValidFrom: neverExpires ? null : contractValidFrom,
+            contractValidTo: neverExpires ? null : contractValidTo,
+        });
+
+        // ✅ shëno request si approved
+        doc.status = 'APPROVED';
+        doc.decidedBy = new Types.ObjectId(me.id);
+        doc.decidedAt = new Date();
+        doc.decisionNote = note ?? '';
+
+        doc.payload = doc.payload || {};
+        doc.payload.meta = doc.payload.meta || {};
+        doc.payload.meta.createdUserId = createdUser._id;
+
+        await doc.save();
+
+        // ✅ gjej label të njësisë (opsionale për email)
+        let unitLabel: string | undefined = undefined;
+        try {
+            const uid = unitIdRaw ? new Types.ObjectId(String(unitIdRaw)) : null;
+            if (uid) {
+                const unitDoc = await Unit.findById(uid).select('code name').lean();
+                if (unitDoc) {
+                    const code = String((unitDoc as any).code ?? '').trim();
+                    const name = String((unitDoc as any).name ?? '').trim();
+                    unitLabel = `${code ? code + ' — ' : ''}${name}`.trim();
+                }
+            }
+        } catch { }
+
+        // ✅ dërgo email (mos e blloko flow nëse dështon)
+        let emailSent = false;
+        try {
+            await sendNewUserCredentials({
+                to: email,
+                username,
+                tempPassword,
+                role,
+                unitLabel,
+            });
+            emailSent = true;
+        } catch (e) {
+            console.error('❌ Email credentials failed:', e);
+            emailSent = false;
+        }
+
+        const out = await ChangeRequest.findById(doc._id)
+            .populate('targetUnitId', 'code name')
+            .populate('createdBy', 'username role unitId')
+            .populate('decidedBy', 'username role')
+            .lean();
+
+        // ✅ DEV helper (mundesh me e hjek në PROD)
+        return res.json({
+            ...out,
+            emailSent,
+            __tempCredentials: { username, password: tempPassword, email },
+        });
+    }
+
+    // --------- Person flows (siç i kishe) ---------
 
     const personBefore: any = await Person.findById(doc.personId).lean();
     if (!personBefore && doc.type !== 'DELETE_PERSON') return res.status(404).json({ code: 'PERSON_NOT_FOUND' });
@@ -874,6 +1070,7 @@ r.post('/:id/reject', requireAuth, requireRole('COMMANDER', 'ADMIN'), async (req
 
     if (me.role === 'COMMANDER') {
         if (!me.unitId) return res.status(403).json({ code: 'FORBIDDEN' });
+
         const unitIds = await getDescendantUnitIds(String(me.unitId));
         if (!unitIds.includes(String(doc.targetUnitId))) return res.status(403).json({ code: 'FORBIDDEN' });
     }
