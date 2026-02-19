@@ -1,3 +1,5 @@
+// apps/api/src/routes/reports.routes.ts
+
 import { Router } from 'express';
 import mongoose from 'mongoose';
 import PDFDocument from 'pdfkit';
@@ -20,9 +22,32 @@ function isObjectId(id: string) {
   return mongoose.Types.ObjectId.isValid(id);
 }
 
+// ✅ kthen unit (id/code/name) për shfaqje në UI
+async function getUnitBrief(unitId: any): Promise<{ id: string; code?: string; name?: string } | null> {
+  try {
+    if (!unitId) return null;
+
+    const u = await (Unit as any)
+      .findById(unitId)
+      .select('_id code name')
+      .lean();
+
+    if (!u) return null;
+
+    return { id: String(u._id), code: u.code, name: u.name };
+  } catch {
+    return null;
+  }
+}
+
 async function resolveUnitId(unit: string) {
+  if (!unit) return undefined;
+
+  // nëse është ObjectId, ktheje direkt
   if (isObjectId(unit)) return unit;
-  const u = await Unit.findOne({ code: unit }).lean();
+
+  // nëse është code, gjeje Unit-in
+  const u = await Unit.findOne({ code: unit }).select('_id').lean();
   return u?._id?.toString();
 }
 
@@ -35,7 +60,7 @@ function sameUnit(user: any, repUnitId: any): boolean {
 
 /* ============ rregullat kohore ============ */
 
-// orari zyrtar: s’lejohen dorëzime/editime PAS orës 16:00 (Europe/Belgrade) për RAPORTIN E SOTËM
+// orari zyrtar: s’lejohen dorëzime/editime PAS orës 16:00 për RAPORTIN E SOTËM
 function isAfterCutoff(): boolean {
   const now = new Date();
   const cutoff = new Date(now);
@@ -224,7 +249,7 @@ function drawTopHeaderMock(
   drawBox(doc, logoBox.x, logoBox.y, logoBox.w, logoBox.h, { stroke: '#111' });
 
   if (logoPath) {
-    drawImageCenteredInBox(doc, logoPath, logoBox, 8); // ✅ qendrim i saktë
+    drawImageCenteredInBox(doc, logoPath, logoBox, 8);
   } else {
     drawTextFixed(doc, 'LOGO', logoBox.x, logoBox.y, logoBox.w, logoBox.h, { align: 'center', bold: true, size: 10 });
   }
@@ -265,7 +290,6 @@ function drawSummaryRow(
   const boxY = y + 36;
   const boxH = 44;
 
-  // ✅ hapsirë nga borderi kryesor: edhe brenda content-it i fusim pak
   const innerPad = 10;
   const innerX = x0 + innerPad;
   const innerW = w0 - innerPad * 2;
@@ -278,12 +302,10 @@ function drawSummaryRow(
     const bx = innerX + i * (boxW + gap);
 
     drawBox(doc, bx, boxY, boxW, boxH, { stroke: '#111' });
-
     drawTextFixed(doc, b.label, bx, boxY + 6, boxW, 18, { size: 9, color: '#111' });
     drawTextFixed(doc, b.value, bx, boxY + 22, boxW, 18, { bold: true, size: 16 });
   }
 
-  // vijë poshtë seksionit
   doc.save();
   doc.strokeColor('#111').lineWidth(1);
   doc.moveTo(x0, y + sectionH).lineTo(x0 + w0, y + sectionH).stroke();
@@ -396,6 +418,7 @@ r.get(
   requireRole('OPERATOR', 'OFFICER', 'COMMANDER', 'ADMIN', 'AUDITOR'),
   async (req, res) => {
     const { date, unit, personId } = req.query as any;
+
     const q: any = {};
     const user: any = (req as any).user;
 
@@ -409,16 +432,37 @@ r.get(
       if (uid) q.unitId = uid;
     }
 
-    const items = await DailyReport.find(q).sort({ date: -1 }).limit(100).lean();
+    // ✅ populate unitId -> Unit, dhe kthe edhe unit: {id,code,name}
+    const itemsRaw = await DailyReport.find(q)
+      .sort({ date: -1 })
+      .limit(100)
+      .populate('unitId', '_id code name')
+      .lean();
+
+    // ✅ nëse filtron me personId, e bëjmë mbi listën e filtruar
+    let items = itemsRaw;
 
     if (personId && isObjectId(String(personId))) {
       const ids = items.map((i) => (i as any)._id);
       const rows = await Justification.find({ reportId: { $in: ids }, personId }).select('reportId').lean();
       const set = new Set(rows.map((r) => String((r as any).reportId)));
-      return res.json(items.filter((i) => set.has(String((i as any)._id))));
+      items = items.filter((i) => set.has(String((i as any)._id)));
     }
 
-    res.json(items);
+    // ✅ normalizo output: unitId mbetet, por shtojmë unit për UI
+    const out = items.map((it: any) => {
+      const u = it.unitId && typeof it.unitId === 'object'
+        ? { id: String(it.unitId._id), code: it.unitId.code, name: it.unitId.name }
+        : null;
+
+      return {
+        ...it,
+        unitId: u ? u.id : it.unitId,
+        unit: u, // ✅ frontend shfaq unit.code/name
+      };
+    });
+
+    return res.json(out);
   }
 );
 
@@ -450,7 +494,13 @@ r.post(
         unitId: uid,
         createdBy: user?.id ?? null,
       });
-      res.status(201).json(item);
+
+      // ✅ kthe edhe unit brief
+      const unitBrief = await getUnitBrief(uid);
+      return res.status(201).json({
+        ...(item.toObject ? item.toObject() : item),
+        unit: unitBrief,
+      });
     } catch (e: any) {
       if (e.code === 11000) return res.status(409).json({ code: 'CONFLICT', message: 'Report exists' });
       throw e;
@@ -466,10 +516,18 @@ r.get(
   requireRole('OPERATOR', 'OFFICER', 'COMMANDER', 'ADMIN', 'AUDITOR'),
   async (req, res) => {
     const user: any = (req as any).user;
-    const item = await DailyReport.findById(req.params.id).lean();
+
+    // ✅ populate unitId
+    const item = await DailyReport.findById(req.params.id)
+      .populate('unitId', '_id code name')
+      .lean();
+
     if (!item) return res.status(404).json({ code: 'NOT_FOUND' });
 
-    if (!sameUnit(user, (item as any).unitId)) {
+    // item.unitId mund të jetë objekt (populated)
+    const unitIdRaw = (item as any).unitId?._id ?? (item as any).unitId;
+
+    if (!sameUnit(user, unitIdRaw)) {
       return res.status(403).json({ code: 'FORBIDDEN_UNIT' });
     }
 
@@ -478,7 +536,16 @@ r.get(
       .populate('categoryId', 'code label')
       .lean();
 
-    res.json({ ...item, rows });
+    const uObj = (item as any).unitId && typeof (item as any).unitId === 'object'
+      ? { id: String((item as any).unitId._id), code: (item as any).unitId.code, name: (item as any).unitId.name }
+      : null;
+
+    return res.json({
+      ...item,
+      unitId: uObj ? uObj.id : (item as any).unitId,
+      unit: uObj,
+      rows,
+    });
   }
 );
 
@@ -557,6 +624,7 @@ r.put(
     if (!existing) return res.status(404).json({ code: 'NOT_FOUND' });
 
     const user: any = (req as any).user;
+
     const lock = await ensureReportEditable(String((existing as any).reportId), user);
     if (!lock.ok) return res.status(lock.code ?? 403).json({ code: lock.msg });
 
@@ -616,6 +684,7 @@ r.delete(
     if (!existing) return res.status(404).json({ code: 'NOT_FOUND' });
 
     const user: any = (req as any).user;
+
     const lock = await ensureReportEditable(String((existing as any).reportId), user);
     if (!lock.ok) return res.status(lock.code ?? 403).json({ code: lock.msg });
 

@@ -62,13 +62,21 @@ api.interceptors.response.use(
 
 export type UserRole = 'ADMIN' | 'OFFICER' | 'OPERATOR' | 'COMMANDER' | 'AUDITOR';
 
+export interface UnitBrief {
+    id: string;
+    code?: string;
+    name?: string;
+}
+
 export interface CurrentUser {
     id: string;
     username: string;
     role: UserRole;
     unitId: string | null;
 
-    // backend mund ta kthejë këtë
+    // ✅ SHTO KETE
+    unit?: UnitBrief | null;
+
     mustChangePassword?: boolean;
 }
 
