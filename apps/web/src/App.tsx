@@ -1,15 +1,13 @@
 // src/App.tsx
 
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 
-import React, { useEffect, useRef, useState } from 'react';
+// ✅ namespace import
+import * as api from './lib/api';
 
-import { getRole, getCurrentUser, logout, searchPeople, getSystemNotice } from './lib/api';
-
-// ✅ vendose logon këtu (ndrysho path sipas projektit tond)
 import FSKLogo from './assets/fsk-logo.png';
 
-// Icons
 import {
   HiHome,
   HiDocumentText,
@@ -20,7 +18,7 @@ import {
   HiLocationMarker,
   HiUserGroup,
   HiShieldCheck,
-  HiSpeakerphone, // ✅ NEW
+  HiSpeakerphone,
   HiLogout,
   HiSearch,
   HiX,
@@ -39,7 +37,6 @@ type SuggestItem = {
   unitId?: string;
 };
 
-// ✅ System Notice type (front)
 type SystemNotice = {
   enabled: boolean;
   severity: 'urgent' | 'info' | 'warning';
@@ -48,13 +45,11 @@ type SystemNotice = {
   updatedAt?: string;
 };
 
-// ✅ helper: shfaq rolin bukur
 function formatRole(role?: string | null) {
   if (!role) return '—';
   return String(role).replaceAll('_', ' ').toUpperCase();
 }
 
-// ✅ hook i lehtë për breakpoint (mobile)
 function useIsMobile(breakpointPx = 900) {
   const [isMobile, setIsMobile] = useState(() => {
     if (typeof window === 'undefined') return false;
@@ -70,7 +65,6 @@ function useIsMobile(breakpointPx = 900) {
   return isMobile;
 }
 
-// ✅ Banner component (brenda App.tsx - s’ka nevojë file tjetër)
 function SystemNoticeBar({ notice }: { notice: SystemNotice | null }) {
   if (!notice?.enabled) return null;
 
@@ -96,11 +90,51 @@ function SystemNoticeBar({ notice }: { notice: SystemNotice | null }) {
   );
 }
 
+/** =========================
+ * ✅ Unseen badges (per-user)
+ * - ruan "last seen totals" në localStorage PER USER
+ * - badge = total - lastSeen
+ * - lastSeen përditësohet vetëm kur ai user e hap faqen
+ * ========================= */
+const LS_PREFIX = 'sm_seen_total_v1';
+
+type SeenKey = 'pendingPeople' | 'requests' | 'approvals';
+
+function keyFor(userId: string | null | undefined, k: SeenKey) {
+  // në rast se s’ka user (nuk duhet në app shell), ruaj veç “anon”
+  const uid = userId || 'anon';
+  return `${LS_PREFIX}:${uid}:${k}`;
+}
+
+function readSeen(key: string) {
+  try {
+    const v = localStorage.getItem(key);
+    const n = v ? Number(v) : 0;
+    return Number.isFinite(n) ? n : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function writeSeen(key: string, value: number) {
+  try {
+    localStorage.setItem(key, String(Math.max(0, Math.floor(value || 0))));
+  } catch {
+    // ignore
+  }
+}
+
+function clampUnseen(total: number, seen: number) {
+  const t = Math.max(0, Math.floor(total || 0));
+  const s = Math.max(0, Math.floor(seen || 0));
+  return Math.max(0, t - Math.min(s, t));
+}
+
 export default function App() {
   const loc = useLocation();
   const navigate = useNavigate();
 
-  const role = getRole();
+  const role = api.getRole?.() as any;
 
   const isAdmin = role === 'ADMIN';
   const isCommander = role === 'COMMANDER';
@@ -108,7 +142,8 @@ export default function App() {
   const isOperator = role === 'OPERATOR';
   const isAuditor = role === 'AUDITOR';
 
-  const user = getCurrentUser();
+  const user = api.getCurrentUser?.();
+  const userId = (user as any)?.id || (user as any)?._id || null;
 
   const canSeePeople = isAdmin || isOfficer || isOperator || isCommander;
   const canSeePeoplePending = isAdmin || isCommander;
@@ -117,11 +152,9 @@ export default function App() {
 
   const canUseSearch = canSeePeople;
 
-  // ✅ Mobile drawer
   const isMobile = useIsMobile(900);
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  // ✅ Desktop collapse (ruaje në localStorage)
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
     try {
       return localStorage.getItem('sm_sidebar_collapsed') === '1';
@@ -133,18 +166,14 @@ export default function App() {
   useEffect(() => {
     try {
       localStorage.setItem('sm_sidebar_collapsed', sidebarCollapsed ? '1' : '0');
-    } catch {
-      // ignore
-    }
+    } catch { }
   }, [sidebarCollapsed]);
 
-  // ✅ kur ndryshon route në mobile, mbylle drawer-in
   useEffect(() => {
     if (isMobile) setMobileOpen(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loc.pathname, isMobile]);
 
-  // ✅ ESC mbyll drawer-in
   useEffect(() => {
     const onEsc = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setMobileOpen(false);
@@ -153,7 +182,7 @@ export default function App() {
     return () => window.removeEventListener('keydown', onEsc);
   }, []);
 
-  // 🔎 Search (live)
+  // 🔎 Search
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(false);
   const [loadingSug, setLoadingSug] = useState(false);
@@ -168,9 +197,8 @@ export default function App() {
 
     async function loadNotice() {
       try {
-        const data = (await getSystemNotice()) as SystemNotice;
+        const data = (await api.getSystemNotice?.()) as SystemNotice;
         if (!mounted) return;
-
         if (data?.enabled) setSystemNotice(data);
         else setSystemNotice(null);
       } catch {
@@ -179,25 +207,22 @@ export default function App() {
     }
 
     loadNotice();
-    const t = window.setInterval(loadNotice, 30000); // refresh çdo 30 sek
+    const t = window.setInterval(loadNotice, 30000);
     return () => {
       mounted = false;
       window.clearInterval(t);
     };
   }, []);
 
-  // Close search dropdown on outside click
   useEffect(() => {
     function onDoc(e: MouseEvent) {
       if (!boxRef.current) return;
       if (!boxRef.current.contains(e.target as Node)) setOpen(false);
     }
-
     document.addEventListener('mousedown', onDoc);
     return () => document.removeEventListener('mousedown', onDoc);
   }, []);
 
-  // Debounced search
   useEffect(() => {
     if (!canUseSearch) return;
 
@@ -212,8 +237,8 @@ export default function App() {
 
     const t = setTimeout(async () => {
       try {
-        const res = await searchPeople(term, 1, 6);
-        setSug((res.items ?? []) as any);
+        const res = await api.searchPeople?.(term, 1, 6);
+        setSug(((res as any)?.items ?? []) as any);
         setOpen(true);
       } catch {
         setSug([]);
@@ -228,17 +253,83 @@ export default function App() {
   const goToPeopleSearch = (term: string) => {
     const clean = term.trim();
     if (!clean) return;
-
     navigate(`/people?q=${encodeURIComponent(clean)}`);
     setOpen(false);
   };
 
   const placeholder = canUseSearch ? 'Kërko ushtar… (emër, mbiemër, nr. shërbimi)' : 'Search…';
 
-  // ✅ Sidebar width rules
   const desktopSidebarWidth = sidebarCollapsed ? 'w-[88px]' : 'w-[280px]';
 
-  // ✅ Sidebar component (përdoret për desktop dhe mobile drawer)
+  /** =========================
+   * ✅ Counts + unseen badges
+   * ========================= */
+  const [counts, setCounts] = useState({
+    pendingPeopleTotal: 0,
+    requestsTotal: 0,
+    approvalsTotal: 0,
+  });
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadCounts() {
+      try {
+        const fnPending = (api as any).getPeoplePendingCount;
+        const fnReq = (api as any).getRequestsCount;
+        const fnAppr = (api as any).getApprovalsCount;
+
+        const [p, r, a] = await Promise.all([
+          canSeePeoplePending && typeof fnPending === 'function' ? fnPending() : 0,
+          canSeeRequests && typeof fnReq === 'function' ? fnReq() : 0,
+          typeof fnAppr === 'function' ? fnAppr() : 0,
+        ]);
+
+        if (!mounted) return;
+
+        setCounts({
+          pendingPeopleTotal: Number(p || 0),
+          requestsTotal: Number(r || 0),
+          approvalsTotal: Number(a || 0),
+        });
+      } catch {
+        // ignore
+      }
+    }
+
+    loadCounts();
+    const t = window.setInterval(loadCounts, 30000);
+    return () => {
+      mounted = false;
+      window.clearInterval(t);
+    };
+  }, [canSeePeoplePending, canSeeRequests]);
+
+  // ✅ Ack per user vetëm kur ai user e hap faqen
+  useEffect(() => {
+    const path = loc.pathname;
+
+    if (path.startsWith('/people/pending')) {
+      writeSeen(keyFor(userId, 'pendingPeople'), counts.pendingPeopleTotal);
+    }
+    if (path.startsWith('/requests')) {
+      writeSeen(keyFor(userId, 'requests'), counts.requestsTotal);
+    }
+    if (path.startsWith('/approvals')) {
+      writeSeen(keyFor(userId, 'approvals'), counts.approvalsTotal);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loc.pathname, userId, counts.pendingPeopleTotal, counts.requestsTotal, counts.approvalsTotal]);
+
+  // ✅ seen totals per user
+  const seenPendingPeople = useMemo(() => readSeen(keyFor(userId, 'pendingPeople')), [userId]);
+  const seenRequests = useMemo(() => readSeen(keyFor(userId, 'requests')), [userId]);
+  const seenApprovals = useMemo(() => readSeen(keyFor(userId, 'approvals')), [userId]);
+
+  const unseenPendingPeople = canSeePeoplePending ? clampUnseen(counts.pendingPeopleTotal, seenPendingPeople) : 0;
+  const unseenRequests = canSeeRequests ? clampUnseen(counts.requestsTotal, seenRequests) : 0;
+  const unseenApprovals = clampUnseen(counts.approvalsTotal, seenApprovals);
+
   const Sidebar = ({
     collapsed,
     showDesktopHandle,
@@ -258,10 +349,8 @@ export default function App() {
           'transition-[width] duration-200',
         ].join(' ')}
       >
-        {/* ✅ TOP: LOGO (klik për hap/mbyll) */}
         <div className="px-4 pt-4 pb-3">
           <div className={['flex items-center', collapsed ? 'justify-center' : 'justify-start gap-3'].join(' ')}>
-            {/* ✅ LOGO e FSK-së (qendër kur collapsed) */}
             <button
               type="button"
               onClick={() => {
@@ -288,7 +377,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* ✅ DESKTOP: Handle diskret në mes */}
         {showDesktopHandle && !isMobile && (
           <button
             type="button"
@@ -302,38 +390,23 @@ export default function App() {
             aria-label={collapsed ? 'Hap navigimin' : 'Mbyll navigimin'}
             title={collapsed ? 'Hap navigimin' : 'Mbyll navigimin'}
           >
-            {collapsed ? (
-              <HiChevronRight className="text-lg text-gray-600" />
-            ) : (
-              <HiChevronLeft className="text-lg text-gray-600" />
-            )}
+            {collapsed ? <HiChevronRight className="text-lg text-gray-600" /> : <HiChevronLeft className="text-lg text-gray-600" />}
           </button>
         )}
 
-        {/* Navigation */}
         <nav className="px-2 pb-3 flex-1 overflow-y-auto">
-          {!collapsed && (
-            <div className="px-2 mb-2 text-[11px] font-semibold uppercase tracking-wider text-gray-400">Kryesore</div>
-          )}
+          {!collapsed && <div className="px-2 mb-2 text-[11px] font-semibold uppercase tracking-wider text-gray-400">Kryesore</div>}
 
           <NavItem collapsed={collapsed} to="/" label="Dashboard" current={loc.pathname === '/'} icon={<HiHome />} />
-          <NavItem
-            collapsed={collapsed}
-            to="/reports"
-            label="Raport Ditor"
-            current={loc.pathname.startsWith('/reports')}
-            icon={<HiDocumentText />}
-          />
+
+          <NavItem collapsed={collapsed} to="/reports" label="Raport Ditor" current={loc.pathname.startsWith('/reports')} icon={<HiDocumentText />} />
 
           {canSeePeople && (
             <NavItem
               collapsed={collapsed}
               to="/people"
               label="Ushtarët"
-              current={
-                loc.pathname === '/people' ||
-                (loc.pathname.startsWith('/people/') && !loc.pathname.startsWith('/people/pending'))
-              }
+              current={loc.pathname === '/people' || (loc.pathname.startsWith('/people/') && !loc.pathname.startsWith('/people/pending'))}
               icon={<HiUsers />}
             />
           )}
@@ -345,6 +418,7 @@ export default function App() {
               label="Ushtarët në pritje"
               current={loc.pathname.startsWith('/people/pending')}
               icon={<HiClock />}
+              badge={unseenPendingPeople}
             />
           )}
 
@@ -355,6 +429,7 @@ export default function App() {
               label="Kërkesat"
               current={loc.pathname.startsWith('/requests')}
               icon={<HiClipboardList />}
+              badge={unseenRequests}
             />
           )}
 
@@ -364,6 +439,7 @@ export default function App() {
             label="Miratime"
             current={loc.pathname.startsWith('/approvals')}
             icon={<HiCheckCircle />}
+            badge={unseenApprovals}
           />
 
           {canSeeVehiclesLive && (
@@ -378,54 +454,22 @@ export default function App() {
 
           {isAdmin && (
             <>
-              {!collapsed && (
-                <div className="mt-5 px-2 mb-2 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
-                  Admin
-                </div>
-              )}
+              {!collapsed && <div className="mt-5 px-2 mb-2 text-[11px] font-semibold uppercase tracking-wider text-gray-400">Admin</div>}
 
-              <NavItem
-                collapsed={collapsed}
-                to="/users"
-                label="Përdoruesit"
-                current={loc.pathname.startsWith('/users')}
-                icon={<HiUserGroup />}
-              />
+              <NavItem collapsed={collapsed} to="/users" label="Përdoruesit" current={loc.pathname.startsWith('/users')} icon={<HiUserGroup />} />
 
-              <NavItem
-                collapsed={collapsed}
-                to="/admin/login-audit"
-                label="Login / Logout Logs"
-                current={loc.pathname.startsWith('/admin/login-audit')}
-                icon={<HiShieldCheck />}
-              />
+              <NavItem collapsed={collapsed} to="/admin/login-audit" label="Login / Logout Logs" current={loc.pathname.startsWith('/admin/login-audit')} icon={<HiShieldCheck />} />
 
-              {/* ✅ NEW: System Notice Admin page */}
-              <NavItem
-                collapsed={collapsed}
-                to="/admin/system-notice"
-                label="System Notice"
-                current={loc.pathname.startsWith('/admin/system-notice')}
-                icon={<HiSpeakerphone />}
-              />
+              <NavItem collapsed={collapsed} to="/admin/system-notice" label="System Notice" current={loc.pathname.startsWith('/admin/system-notice')} icon={<HiSpeakerphone />} />
             </>
           )}
         </nav>
 
-        {/* ✅ Bottom user box + logout */}
         <div className="p-4 border-t border-gray-200 shrink-0">
           {user && (
-            <div
-              className={[
-                'mb-3 rounded-xl bg-white shadow-sm border border-gray-100',
-                collapsed ? 'p-2 flex items-center justify-center' : 'p-3',
-              ].join(' ')}
-            >
+            <div className={['mb-3 rounded-xl bg-white shadow-sm border border-gray-100', collapsed ? 'p-2 flex items-center justify-center' : 'p-3'].join(' ')}>
               {collapsed ? (
-                <div
-                  className="w-10 h-10 rounded-full bg-gray-900 text-white flex items-center justify-center text-sm font-semibold"
-                  title={`${user.username} • ${formatRole(user.role)}`}
-                >
+                <div className="w-10 h-10 rounded-full bg-gray-900 text-white flex items-center justify-center text-sm font-semibold" title={`${user.username} • ${formatRole(user.role)}`}>
                   {user.username?.slice(0, 1)?.toUpperCase() || 'U'}
                 </div>
               ) : (
@@ -442,7 +486,7 @@ export default function App() {
 
           <button
             onClick={async () => {
-              await logout();
+              await api.logout?.();
               navigate('/login', { replace: true });
             }}
             className={[
@@ -466,45 +510,21 @@ export default function App() {
 
   return (
     <div className="h-screen w-full bg-[#f3f5f8] overflow-hidden flex">
-      {/* ✅ DESKTOP sidebar */}
-      {!isMobile && (
-        <Sidebar
-          collapsed={sidebarCollapsed}
-          showDesktopHandle={true}
-          onToggleCollapse={() => setSidebarCollapsed((v) => !v)}
-        />
-      )}
+      {!isMobile && <Sidebar collapsed={sidebarCollapsed} showDesktopHandle={true} onToggleCollapse={() => setSidebarCollapsed((v) => !v)} />}
 
-      {/* ✅ MOBILE drawer sidebar */}
       {isMobile && (
         <>
-          {mobileOpen && (
-            <div
-              className="fixed inset-0 bg-gray-900/40 z-[9998]"
-              onClick={() => setMobileOpen(false)}
-              aria-hidden="true"
-            />
-          )}
-
-          <div
-            className={[
-              'fixed top-0 left-0 z-[9999] h-screen',
-              'transition-transform duration-200',
-              mobileOpen ? 'translate-x-0' : '-translate-x-full',
-            ].join(' ')}
-          >
+          {mobileOpen && <div className="fixed inset-0 bg-gray-900/40 z-[9998]" onClick={() => setMobileOpen(false)} aria-hidden="true" />}
+          <div className={['fixed top-0 left-0 z-[9999] h-screen', 'transition-transform duration-200', mobileOpen ? 'translate-x-0' : '-translate-x-full'].join(' ')}>
             <Sidebar collapsed={false} showDesktopHandle={false} onToggleCollapse={() => { }} />
           </div>
         </>
       )}
 
-      {/* MAIN */}
       <main className="flex-1 h-screen overflow-y-auto">
         <div className="p-4 md:p-6 space-y-6">
-          {/* ✅ SYSTEM NOTICE BANNER */}
           <SystemNoticeBar notice={systemNotice} />
 
-          {/* HEADER */}
           <div className="flex items-center justify-between gap-3">
             {isMobile && (
               <button
@@ -518,7 +538,6 @@ export default function App() {
               </button>
             )}
 
-            {/* Search */}
             <div ref={boxRef} className="relative w-full max-w-2xl">
               <HiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-lg" />
 
@@ -560,12 +579,9 @@ export default function App() {
                 </button>
               )}
 
-              {/* Dropdown */}
               {canUseSearch && open && q.trim().length >= 2 && (
                 <div className="absolute z-50 mt-2 w-full rounded-xl border border-gray-100 bg-white shadow-lg overflow-hidden">
-                  <div className="px-3 py-2 text-[11px] uppercase tracking-wider text-gray-400 border-b bg-gray-50/60">
-                    {loadingSug ? 'Duke kërkuar…' : 'Rezultatet'}
-                  </div>
+                  <div className="px-3 py-2 text-[11px] uppercase tracking-wider text-gray-400 border-b bg-gray-50/60">{loadingSug ? 'Duke kërkuar…' : 'Rezultatet'}</div>
 
                   {!loadingSug && sug.length === 0 ? (
                     <div className="px-3 py-3 text-sm text-gray-500">
@@ -605,14 +621,13 @@ export default function App() {
               )}
             </div>
 
-            {/* User menu */}
             {user && (
               <UserMenu
                 user={user}
                 onGoProfile={() => navigate('/profile')}
                 onGoChangePassword={() => navigate('/change-password')}
                 onLogout={async () => {
-                  await logout();
+                  await api.logout?.();
                   navigate('/login', { replace: true });
                 }}
               />
@@ -626,7 +641,6 @@ export default function App() {
   );
 }
 
-/** ✅ User menu (clickable user + dropdown) */
 function UserMenu({
   user,
   onGoProfile,
@@ -679,11 +693,7 @@ function UserMenu({
           <div className="text-[11px] uppercase tracking-wider text-gray-400">{formatRole(user.role)}</div>
         </div>
 
-        <svg
-          className={`h-4 w-4 text-gray-500 transition-transform ${open ? 'rotate-180' : ''}`}
-          viewBox="0 0 20 20"
-          fill="currentColor"
-        >
+        <svg className={`h-4 w-4 text-gray-500 transition-transform ${open ? 'rotate-180' : ''}`} viewBox="0 0 20 20" fill="currentColor">
           <path
             fillRule="evenodd"
             d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z"
@@ -748,35 +758,48 @@ function NavItem({
   current,
   icon,
   collapsed,
+  badge = 0,
 }: {
   to: string;
   label: string;
   current: boolean;
   icon: React.ReactNode;
   collapsed: boolean;
+  badge?: number;
 }) {
+  const showBadge = (badge ?? 0) > 0;
+
   return (
     <Link
       to={to}
       title={collapsed ? label : undefined}
       className={[
-        'group flex items-center gap-3 px-3 py-2.5 rounded-xl transition',
-        current
-          ? 'bg-gradient-to-r from-[#2F3E2E]/10 to-[#C9A24D]/10 text-gray-900 border border-[#C9A24D]/30'
-          : 'text-gray-700 hover:bg-gray-100',
+        'group flex items-center gap-3 px-3 py-2.5 rounded-xl transition relative',
+        current ? 'bg-gradient-to-r from-[#2F3E2E]/10 to-[#C9A24D]/10 text-gray-900 border border-[#C9A24D]/30' : 'text-gray-700 hover:bg-gray-100',
         collapsed ? 'justify-center' : '',
       ].join(' ')}
     >
-      <span className={['text-lg transition', current ? 'text-[#2F3E2E]' : 'text-gray-400 group-hover:text-gray-600'].join(' ')}>
+      <span className={['relative text-lg transition', current ? 'text-[#2F3E2E]' : 'text-gray-400 group-hover:text-gray-600'].join(' ')}>
         {icon}
+
+        {collapsed && showBadge && (
+          <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-[#C9A24D] text-white text-[11px] font-bold flex items-center justify-center shadow">
+            {badge > 99 ? '99+' : badge}
+          </span>
+        )}
       </span>
 
       {!collapsed && <span className={['text-sm font-medium', current ? 'text-gray-900' : ''].join(' ')}>{label}</span>}
 
       {!collapsed && (
-        <span
-          className={['ml-auto h-2 w-2 rounded-full transition', current ? 'bg-[#C9A24D]' : 'bg-transparent group-hover:bg-gray-300'].join(' ')}
-        />
+        <span className="ml-auto flex items-center gap-2">
+          {showBadge && (
+            <span className="min-w-[22px] h-[18px] px-2 rounded-full bg-[#C9A24D] text-white text-[11px] font-extrabold flex items-center justify-center shadow-sm">
+              {badge > 99 ? '99+' : badge}
+            </span>
+          )}
+          <span className={['h-2 w-2 rounded-full transition', current ? 'bg-[#C9A24D]' : 'bg-transparent group-hover:bg-gray-300'].join(' ')} />
+        </span>
       )}
     </Link>
   );

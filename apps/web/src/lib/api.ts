@@ -739,3 +739,61 @@ export async function updateSystemNotice(payload: {
     const res = await api.put('/system-notice', payload);
     return res.data as SystemNotice;
 }
+
+/* =========================
+   ✅ COUNTS (për sidebar badges)
+   ========================= */
+
+/**
+ * Helper: nxjerr total-in prej response që mund të jetë:
+ * - { total, items: [] }
+ * - { items: [], ... }
+ * - [] (array)
+ */
+function extractTotal(data: any): number {
+    if (data == null) return 0;
+
+    // array
+    if (Array.isArray(data)) return data.length;
+
+    // pagination shape
+    if (typeof data?.total === 'number') return Number(data.total || 0);
+
+    // items shape pa total
+    if (Array.isArray(data?.items)) return data.items.length;
+
+    return 0;
+}
+
+/**
+ * Sa ushtarë janë në pritje (PENDING)
+ */
+export async function getPeoplePendingCount(): Promise<number> {
+    const { data } = await api.get('/people', {
+        params: { status: 'PENDING', page: 1, limit: 1 },
+    });
+    return extractTotal(data);
+}
+
+/**
+ * Sa kërkesa janë PENDING (incoming)
+ */
+export async function getRequestsCount(): Promise<number> {
+    const { data } = await api.get('/requests/incoming', {
+        params: { status: 'PENDING', page: 1, limit: 1 },
+    });
+    return extractTotal(data);
+}
+
+/**
+ * Sa raporte janë PENDING për miratim
+ */
+export async function getApprovalsCount(): Promise<number> {
+    // në disa backende /reports kthen array, në disa pagination
+    // i japim page/limit që të jetë konsistente
+    const { data } = await api.get('/reports', {
+        params: { status: 'PENDING', page: 1, limit: 1 },
+    });
+
+    return extractTotal(data);
+}
