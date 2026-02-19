@@ -21,6 +21,7 @@ import unitsRoutes from './routes/units.routes';
 import loginAuditRoutes from './routes/loginAudit.routes';
 import requestsRoutes from './routes/requests.routes';
 import vehicleRoutes from './routes/vehicles.routes';
+import systemNoticeRoutes from './routes/systemNotice.routes';
 
 // *** ROUTA TESTUESE PER EMAIL ***
 import testEmailRoutes from './routes/testEmail.routes';
@@ -63,9 +64,8 @@ app.use('/api/units', unitsRoutes);
 app.use('/api/login-audit', loginAuditRoutes);
 app.use('/api/requests', requestsRoutes);
 app.use('/api/vehicles', vehicleRoutes);
-
-// *** ROUTA TESTUESE PËR EMAIL ***
 app.use('/api/test-email', testEmailRoutes);
+app.use('/api/system-notice', systemNoticeRoutes);
 
 // START SERVER
 connectDB(env.MONGODB_URI).then(() => {
