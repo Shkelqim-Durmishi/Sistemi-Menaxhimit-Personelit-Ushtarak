@@ -49,6 +49,7 @@ api.interceptors.response.use(
                 localStorage.removeItem('token');
                 localStorage.removeItem('currentUser');
             } catch { }
+
             try {
                 delete api.defaults.headers.common['Authorization'];
             } catch { }
@@ -259,6 +260,7 @@ export interface PersonListItem {
     personalNumber?: string | null;
     birthDate?: string | null;
     gender?: 'M' | 'F' | 'O' | null;
+
     city?: string | null;
     address?: string | null;
     phone?: string | null;
@@ -428,9 +430,7 @@ export async function listReports(params?: { date?: string; unit?: string; perso
     return data as any[];
 }
 
-/* ===== People helpers: pushimet e ardhshme (APPROVED)
-   ✅ Backend-i yt kthen: {from,to,category,report} ose null
-*/
+/* ===== People helpers: pushimet e ardhshme (APPROVED) ===== */
 
 export async function getUpcomingLeave(personId: string) {
     const { data } = await api.get(`/people/${personId}/upcoming-leave`);
@@ -558,10 +558,8 @@ export async function listLoginAudit(params?: {
    REQUESTS (Kërkesat)
    ========================= */
 
-// ✅ Shtuam ARCHIVE për tab-in "Arkiv" (backend e kupton si special filter)
 export type RequestStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED' | 'ARCHIVE';
 
-// ✅ Shtuam CREATE_USER që të jetë type-safe edhe në Requests.tsx
 export type RequestAction =
     | 'DELETE_PERSON'
     | 'TRANSFER_PERSON'
@@ -572,18 +570,15 @@ export type RequestAction =
     | 'CREATE_USER';
 
 export interface RequestItem {
-    // backend zakonisht kthen _id; në UI mund të përdorësh id ose _id
     id?: string;
     _id?: string;
 
-    // populated ose string
     personId: any;
     targetUnitId?: any;
 
     type: RequestAction;
     payload?: any;
 
-    // status real nga backend (ARCHIVE nuk është status real)
     status: Exclude<RequestStatus, 'ARCHIVE'>;
 
     createdBy?: any;
@@ -625,19 +620,16 @@ export async function getRequest(id: string) {
     return data as RequestItem;
 }
 
-// ✅ approve pret { note }
 export async function approveRequest(id: string, note = '') {
     const { data } = await api.post(`/requests/${id}/approve`, { note });
     return data as RequestItem;
 }
 
-// ✅ reject pret { note }
 export async function rejectRequest(id: string, note = '') {
     const { data } = await api.post(`/requests/${id}/reject`, { note });
     return data as RequestItem;
 }
 
-// ✅ cancel endpoint: /requests/:id/cancel
 export async function cancelRequest(id: string, note = '') {
     const { data } = await api.post(`/requests/${id}/cancel`, { note });
     return data as RequestItem;
@@ -647,11 +639,6 @@ export async function cancelRequest(id: string, note = '') {
    ✅ REQUESTS PDF (NEW)
    ========================= */
 
-/**
- * Opsioni 1: URL me ?auth=TOKEN (si exportUrl)
- * - e përdor kur do me e hap PDF direkt me link/window.open
- * - kërkon që backend-i ta lexojë token-in edhe nga query: req.query.auth
- */
 export function requestPdfUrl(id: string, opts?: { download?: boolean }) {
     const base = (import.meta as any).env?.VITE_API_URL || 'http://localhost:4000/api';
     const token = localStorage.getItem('token');
@@ -664,11 +651,6 @@ export function requestPdfUrl(id: string, opts?: { download?: boolean }) {
     return `${base}/requests/${id}/pdf${qs ? `?${qs}` : ''}`;
 }
 
-/**
- * Opsioni 2: shkarko PDF si blob (më e sigurt)
- * - dërgon Authorization header normalisht
- * - pastaj frontend e hap me URL.createObjectURL
- */
 export async function downloadRequestPdf(id: string) {
     const res = await api.get(`/requests/${id}/pdf`, { responseType: 'blob' });
     return res.data as Blob;
@@ -725,4 +707,35 @@ export async function adminMockVehicleLocation(
 ) {
     const { data } = await api.post(`/vehicles/${vehicleId}/mock-location`, payload);
     return data as { ok: true };
+}
+
+/* =========================
+   ✅ System Notice
+   ========================= */
+
+export type SystemNotice = {
+    enabled: boolean;
+    severity: 'urgent' | 'info' | 'warning';
+    title: string;
+    message: string;
+    updatedAt?: string;
+};
+
+export async function getSystemNotice() {
+    // anti-cache (sidomos në prod / proxies)
+    const res = await api.get('/system-notice', {
+        params: { t: Date.now() },
+        headers: { 'Cache-Control': 'no-store' },
+    });
+    return res.data as SystemNotice;
+}
+
+export async function updateSystemNotice(payload: {
+    enabled: boolean;
+    severity: 'urgent' | 'info' | 'warning';
+    title: string;
+    message: string;
+}) {
+    const res = await api.put('/system-notice', payload);
+    return res.data as SystemNotice;
 }

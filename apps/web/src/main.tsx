@@ -1,4 +1,5 @@
 // src/main.tsx
+
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
@@ -22,6 +23,9 @@ import VehiclesLive from './pages/VehiclesLive';
 // ✅ NEW – Profile + Change Password
 import ProfilePage from './pages/profile';
 import ChangePasswordPage from './pages/change-password';
+
+// ✅ NEW – System Notice Admin (vetëm ADMIN)
+import SystemNoticeAdminPage from './pages/SystemNoticeAdminPage';
 
 import './index.css';
 import { getCurrentUser } from './lib/api';
@@ -174,6 +178,16 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
               element={
                 <RequireRole roles={['ADMIN']}>
                   <LoginAuditPage />
+                </RequireRole>
+              }
+            />
+
+            {/* ✅ ADMIN: SYSTEM NOTICE */}
+            <Route
+              path="admin/system-notice"
+              element={
+                <RequireRole roles={['ADMIN']}>
+                  <SystemNoticeAdminPage />
                 </RequireRole>
               }
             />

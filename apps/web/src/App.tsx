@@ -1,9 +1,10 @@
 // src/App.tsx
 
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
+
 import React, { useEffect, useRef, useState } from 'react';
 
-import { getRole, getCurrentUser, logout, searchPeople } from './lib/api';
+import { getRole, getCurrentUser, logout, searchPeople, getSystemNotice } from './lib/api';
 
 // ✅ vendose logon këtu (ndrysho path sipas projektit tond)
 import FSKLogo from './assets/fsk-logo.png';
@@ -19,6 +20,7 @@ import {
   HiLocationMarker,
   HiUserGroup,
   HiShieldCheck,
+  HiSpeakerphone, // ✅ NEW
   HiLogout,
   HiSearch,
   HiX,
@@ -35,6 +37,15 @@ type SuggestItem = {
   firstName: string;
   lastName: string;
   unitId?: string;
+};
+
+// ✅ System Notice type (front)
+type SystemNotice = {
+  enabled: boolean;
+  severity: 'urgent' | 'info' | 'warning';
+  title: string;
+  message: string;
+  updatedAt?: string;
 };
 
 // ✅ helper: shfaq rolin bukur
@@ -59,11 +70,38 @@ function useIsMobile(breakpointPx = 900) {
   return isMobile;
 }
 
+// ✅ Banner component (brenda App.tsx - s’ka nevojë file tjetër)
+function SystemNoticeBar({ notice }: { notice: SystemNotice | null }) {
+  if (!notice?.enabled) return null;
+
+  const styles =
+    notice.severity === 'urgent'
+      ? 'border-red-300 bg-red-50 text-red-800'
+      : notice.severity === 'warning'
+        ? 'border-amber-300 bg-amber-50 text-amber-900'
+        : 'border-blue-300 bg-blue-50 text-blue-900';
+
+  const emoji = notice.severity === 'urgent' ? '🚨' : notice.severity === 'warning' ? '⚠️' : 'ℹ️';
+
+  return (
+    <div className={`rounded-xl border px-4 py-3 shadow-sm ${styles}`}>
+      <div className="flex items-start gap-3">
+        <div className="text-lg font-bold leading-none">{emoji}</div>
+        <div className="min-w-0">
+          <div className="text-sm font-extrabold uppercase tracking-wide">{notice.title || 'Njoftim'}</div>
+          <div className="mt-0.5 text-sm">{notice.message}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const loc = useLocation();
   const navigate = useNavigate();
 
   const role = getRole();
+
   const isAdmin = role === 'ADMIN';
   const isCommander = role === 'COMMANDER';
   const isOfficer = role === 'OFFICER';
@@ -122,12 +160,39 @@ export default function App() {
   const [sug, setSug] = useState<SuggestItem[]>([]);
   const boxRef = useRef<HTMLDivElement | null>(null);
 
+  // ✅ System Notice (banner)
+  const [systemNotice, setSystemNotice] = useState<SystemNotice | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadNotice() {
+      try {
+        const data = (await getSystemNotice()) as SystemNotice;
+        if (!mounted) return;
+
+        if (data?.enabled) setSystemNotice(data);
+        else setSystemNotice(null);
+      } catch {
+        if (mounted) setSystemNotice(null);
+      }
+    }
+
+    loadNotice();
+    const t = window.setInterval(loadNotice, 30000); // refresh çdo 30 sek
+    return () => {
+      mounted = false;
+      window.clearInterval(t);
+    };
+  }, []);
+
   // Close search dropdown on outside click
   useEffect(() => {
     function onDoc(e: MouseEvent) {
       if (!boxRef.current) return;
       if (!boxRef.current.contains(e.target as Node)) setOpen(false);
     }
+
     document.addEventListener('mousedown', onDoc);
     return () => document.removeEventListener('mousedown', onDoc);
   }, []);
@@ -144,6 +209,7 @@ export default function App() {
     }
 
     setLoadingSug(true);
+
     const t = setTimeout(async () => {
       try {
         const res = await searchPeople(term, 1, 6);
@@ -162,6 +228,7 @@ export default function App() {
   const goToPeopleSearch = (term: string) => {
     const clean = term.trim();
     if (!clean) return;
+
     navigate(`/people?q=${encodeURIComponent(clean)}`);
     setOpen(false);
   };
@@ -198,7 +265,6 @@ export default function App() {
             <button
               type="button"
               onClick={() => {
-                // në mobile mos e përdor këtë për collapse, se mobile ka drawer
                 if (isMobile) return;
                 onToggleCollapse();
               }}
@@ -222,7 +288,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* ✅ DESKTOP: Handle diskret në mes (s’duket si hamburger, del veç kur hover) */}
+        {/* ✅ DESKTOP: Handle diskret në mes */}
         {showDesktopHandle && !isMobile && (
           <button
             type="button"
@@ -236,23 +302,34 @@ export default function App() {
             aria-label={collapsed ? 'Hap navigimin' : 'Mbyll navigimin'}
             title={collapsed ? 'Hap navigimin' : 'Mbyll navigimin'}
           >
-            {collapsed ? <HiChevronRight className="text-lg text-gray-600" /> : <HiChevronLeft className="text-lg text-gray-600" />}
+            {collapsed ? (
+              <HiChevronRight className="text-lg text-gray-600" />
+            ) : (
+              <HiChevronLeft className="text-lg text-gray-600" />
+            )}
           </button>
         )}
 
-        {/* Navigation (scroll vetëm këtu nëse ka shumë itema) */}
+        {/* Navigation */}
         <nav className="px-2 pb-3 flex-1 overflow-y-auto">
-          {!collapsed && <div className="px-2 mb-2 text-[11px] font-semibold uppercase tracking-wider text-gray-400">Kryesore</div>}
+          {!collapsed && (
+            <div className="px-2 mb-2 text-[11px] font-semibold uppercase tracking-wider text-gray-400">Kryesore</div>
+          )}
 
           <NavItem collapsed={collapsed} to="/" label="Dashboard" current={loc.pathname === '/'} icon={<HiHome />} />
-          <NavItem collapsed={collapsed} to="/reports" label="Raport Ditor" current={loc.pathname.startsWith('/reports')} icon={<HiDocumentText />} />
+          <NavItem
+            collapsed={collapsed}
+            to="/reports"
+            label="Raport Ditor"
+            current={loc.pathname.startsWith('/reports')}
+            icon={<HiDocumentText />}
+          />
 
           {canSeePeople && (
             <NavItem
               collapsed={collapsed}
               to="/people"
               label="Ushtarët"
-              // ✅ FIX: mos e aktivizo kur je te /people/pending
               current={
                 loc.pathname === '/people' ||
                 (loc.pathname.startsWith('/people/') && !loc.pathname.startsWith('/people/pending'))
@@ -272,10 +349,22 @@ export default function App() {
           )}
 
           {canSeeRequests && (
-            <NavItem collapsed={collapsed} to="/requests" label="Kërkesat" current={loc.pathname.startsWith('/requests')} icon={<HiClipboardList />} />
+            <NavItem
+              collapsed={collapsed}
+              to="/requests"
+              label="Kërkesat"
+              current={loc.pathname.startsWith('/requests')}
+              icon={<HiClipboardList />}
+            />
           )}
 
-          <NavItem collapsed={collapsed} to="/approvals" label="Miratime" current={loc.pathname.startsWith('/approvals')} icon={<HiCheckCircle />} />
+          <NavItem
+            collapsed={collapsed}
+            to="/approvals"
+            label="Miratime"
+            current={loc.pathname.startsWith('/approvals')}
+            icon={<HiCheckCircle />}
+          />
 
           {canSeeVehiclesLive && (
             <NavItem
@@ -289,9 +378,20 @@ export default function App() {
 
           {isAdmin && (
             <>
-              {!collapsed && <div className="mt-5 px-2 mb-2 text-[11px] font-semibold uppercase tracking-wider text-gray-400">Admin</div>}
+              {!collapsed && (
+                <div className="mt-5 px-2 mb-2 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
+                  Admin
+                </div>
+              )}
 
-              <NavItem collapsed={collapsed} to="/users" label="Përdoruesit" current={loc.pathname.startsWith('/users')} icon={<HiUserGroup />} />
+              <NavItem
+                collapsed={collapsed}
+                to="/users"
+                label="Përdoruesit"
+                current={loc.pathname.startsWith('/users')}
+                icon={<HiUserGroup />}
+              />
+
               <NavItem
                 collapsed={collapsed}
                 to="/admin/login-audit"
@@ -299,16 +399,33 @@ export default function App() {
                 current={loc.pathname.startsWith('/admin/login-audit')}
                 icon={<HiShieldCheck />}
               />
+
+              {/* ✅ NEW: System Notice Admin page */}
+              <NavItem
+                collapsed={collapsed}
+                to="/admin/system-notice"
+                label="System Notice"
+                current={loc.pathname.startsWith('/admin/system-notice')}
+                icon={<HiSpeakerphone />}
+              />
             </>
           )}
         </nav>
 
-        {/* ✅ Bottom user box + logout (STATIK) */}
+        {/* ✅ Bottom user box + logout */}
         <div className="p-4 border-t border-gray-200 shrink-0">
           {user && (
-            <div className={['mb-3 rounded-xl bg-white shadow-sm border border-gray-100', collapsed ? 'p-2 flex items-center justify-center' : 'p-3'].join(' ')}>
+            <div
+              className={[
+                'mb-3 rounded-xl bg-white shadow-sm border border-gray-100',
+                collapsed ? 'p-2 flex items-center justify-center' : 'p-3',
+              ].join(' ')}
+            >
               {collapsed ? (
-                <div className="w-10 h-10 rounded-full bg-gray-900 text-white flex items-center justify-center text-sm font-semibold" title={`${user.username} • ${formatRole(user.role)}`}>
+                <div
+                  className="w-10 h-10 rounded-full bg-gray-900 text-white flex items-center justify-center text-sm font-semibold"
+                  title={`${user.username} • ${formatRole(user.role)}`}
+                >
                   {user.username?.slice(0, 1)?.toUpperCase() || 'U'}
                 </div>
               ) : (
@@ -323,7 +440,6 @@ export default function App() {
             </div>
           )}
 
-          {/* ✅ Logout red */}
           <button
             onClick={async () => {
               await logout();
@@ -350,27 +466,46 @@ export default function App() {
 
   return (
     <div className="h-screen w-full bg-[#f3f5f8] overflow-hidden flex">
-      {/* ✅ DESKTOP sidebar (statik) */}
-      {!isMobile && <Sidebar collapsed={sidebarCollapsed} showDesktopHandle={true} onToggleCollapse={() => setSidebarCollapsed((v) => !v)} />}
+      {/* ✅ DESKTOP sidebar */}
+      {!isMobile && (
+        <Sidebar
+          collapsed={sidebarCollapsed}
+          showDesktopHandle={true}
+          onToggleCollapse={() => setSidebarCollapsed((v) => !v)}
+        />
+      )}
 
       {/* ✅ MOBILE drawer sidebar */}
       {isMobile && (
         <>
-          {/* overlay */}
-          {mobileOpen && <div className="fixed inset-0 bg-gray-900/40 z-[9998]" onClick={() => setMobileOpen(false)} aria-hidden="true" />}
+          {mobileOpen && (
+            <div
+              className="fixed inset-0 bg-gray-900/40 z-[9998]"
+              onClick={() => setMobileOpen(false)}
+              aria-hidden="true"
+            />
+          )}
 
-          <div className={['fixed top-0 left-0 z-[9999] h-screen', 'transition-transform duration-200', mobileOpen ? 'translate-x-0' : '-translate-x-full'].join(' ')}>
+          <div
+            className={[
+              'fixed top-0 left-0 z-[9999] h-screen',
+              'transition-transform duration-200',
+              mobileOpen ? 'translate-x-0' : '-translate-x-full',
+            ].join(' ')}
+          >
             <Sidebar collapsed={false} showDesktopHandle={false} onToggleCollapse={() => { }} />
           </div>
         </>
       )}
 
-      {/* MAIN (scrollon vetëm kjo pjesë) */}
+      {/* MAIN */}
       <main className="flex-1 h-screen overflow-y-auto">
         <div className="p-4 md:p-6 space-y-6">
-          {/* HEADER (Mobile menu + Search + User Menu) */}
+          {/* ✅ SYSTEM NOTICE BANNER */}
+          <SystemNoticeBar notice={systemNotice} />
+
+          {/* HEADER */}
           <div className="flex items-center justify-between gap-3">
-            {/* ✅ Mobile hamburger (vetëm në header) */}
             {isMobile && (
               <button
                 type="button"
@@ -386,6 +521,7 @@ export default function App() {
             {/* Search */}
             <div ref={boxRef} className="relative w-full max-w-2xl">
               <HiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-lg" />
+
               <input
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
@@ -427,7 +563,9 @@ export default function App() {
               {/* Dropdown */}
               {canUseSearch && open && q.trim().length >= 2 && (
                 <div className="absolute z-50 mt-2 w-full rounded-xl border border-gray-100 bg-white shadow-lg overflow-hidden">
-                  <div className="px-3 py-2 text-[11px] uppercase tracking-wider text-gray-400 border-b bg-gray-50/60">{loadingSug ? 'Duke kërkuar…' : 'Rezultatet'}</div>
+                  <div className="px-3 py-2 text-[11px] uppercase tracking-wider text-gray-400 border-b bg-gray-50/60">
+                    {loadingSug ? 'Duke kërkuar…' : 'Rezultatet'}
+                  </div>
 
                   {!loadingSug && sug.length === 0 ? (
                     <div className="px-3 py-3 text-sm text-gray-500">
@@ -456,7 +594,11 @@ export default function App() {
                     </div>
                   )}
 
-                  <button type="button" onClick={() => goToPeopleSearch(q)} className="w-full px-3 py-2 text-sm font-semibold text-[#2F3E2E] hover:bg-[#2F3E2E]/5 border-t">
+                  <button
+                    type="button"
+                    onClick={() => goToPeopleSearch(q)}
+                    className="w-full px-3 py-2 text-sm font-semibold text-[#2F3E2E] hover:bg-[#2F3E2E]/5 border-t"
+                  >
                     Kërko “{q.trim()}” te Ushtarët
                   </button>
                 </div>
@@ -504,12 +646,14 @@ function UserMenu({
       if (!wrapRef.current) return;
       if (!wrapRef.current.contains(e.target as Node)) setOpen(false);
     };
+
     const onEsc = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setOpen(false);
     };
 
     document.addEventListener('mousedown', onClickOutside);
     window.addEventListener('keydown', onEsc);
+
     return () => {
       document.removeEventListener('mousedown', onClickOutside);
       window.removeEventListener('keydown', onEsc);
@@ -535,7 +679,11 @@ function UserMenu({
           <div className="text-[11px] uppercase tracking-wider text-gray-400">{formatRole(user.role)}</div>
         </div>
 
-        <svg className={`h-4 w-4 text-gray-500 transition-transform ${open ? 'rotate-180' : ''}`} viewBox="0 0 20 20" fill="currentColor">
+        <svg
+          className={`h-4 w-4 text-gray-500 transition-transform ${open ? 'rotate-180' : ''}`}
+          viewBox="0 0 20 20"
+          fill="currentColor"
+        >
           <path
             fillRule="evenodd"
             d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z"
@@ -625,7 +773,11 @@ function NavItem({
 
       {!collapsed && <span className={['text-sm font-medium', current ? 'text-gray-900' : ''].join(' ')}>{label}</span>}
 
-      {!collapsed && <span className={['ml-auto h-2 w-2 rounded-full transition', current ? 'bg-[#C9A24D]' : 'bg-transparent group-hover:bg-gray-300'].join(' ')} />}
+      {!collapsed && (
+        <span
+          className={['ml-auto h-2 w-2 rounded-full transition', current ? 'bg-[#C9A24D]' : 'bg-transparent group-hover:bg-gray-300'].join(' ')}
+        />
+      )}
     </Link>
   );
 }
