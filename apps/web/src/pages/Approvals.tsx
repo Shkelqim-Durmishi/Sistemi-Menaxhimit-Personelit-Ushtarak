@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
+
 import { listReports, approveReport, rejectReport, getReport } from '../lib/api';
+
 import {
   HiRefresh,
   HiSearch,
@@ -13,10 +15,13 @@ import {
 
 type ReportStatus = 'DRAFT' | 'PENDING' | 'APPROVED' | 'REJECTED';
 
+type UnitBrief = { id: string; code?: string; name?: string };
+
 type Report = {
   _id: string;
   date: string;
   unitId: string;
+  unit?: UnitBrief | null; // ✅ backend tash po e kthen kete
   status: ReportStatus;
   reviewComment?: string;
 };
@@ -37,11 +42,18 @@ function fmtDate(iso?: string) {
   return s.length === 10 ? s : String(iso);
 }
 
+function fmtUnit(rep?: { unitId?: string; unit?: UnitBrief | null }) {
+  if (!rep) return '—';
+  const code = rep.unit?.code?.trim();
+  const name = rep.unit?.name?.trim();
+  if (code && name) return `${code} — ${name}`;
+  if (code) return code;
+  if (name) return name;
+  return String(rep.unitId ?? '—');
+}
+
 function StatusPill({ status }: { status: ReportStatus }) {
-  const map: Record<
-    ReportStatus,
-    { cls: string; label: string; icon: JSX.Element }
-  > = {
+  const map: Record<ReportStatus, { cls: string; label: string; icon: JSX.Element }> = {
     DRAFT: {
       cls: 'bg-slate-50 text-slate-700 border-slate-200',
       label: 'Draft',
@@ -90,6 +102,7 @@ function Modal({
   onClose: () => void;
 }) {
   if (!open) return null;
+
   return (
     <div className="fixed inset-0 z-50">
       <div
@@ -141,17 +154,20 @@ export default function Approvals() {
   async function load() {
     setLoading(true);
     try {
-      // NOTE: nëse backend e pranon status, e dërgojmë; përndryshe merr të gjitha
       const params: any = {};
       if (statusFilter !== 'ALL') params.status = statusFilter;
+
       const data = await listReports(params);
+
       const list: Report[] = Array.isArray(data)
         ? data
         : Array.isArray((data as any)?.items)
           ? (data as any).items
           : [];
+
       // newest first
       list.sort((a, b) => String(b.date).localeCompare(String(a.date)));
+
       setItems(list);
     } finally {
       setLoading(false);
@@ -166,9 +182,13 @@ export default function Approvals() {
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();
     if (!term) return items;
+
     return items.filter((it) => {
       const d = fmtDate(it.date).toLowerCase();
-      const u = String(it.unitId).toLowerCase();
+
+      // ✅ lejo search edhe me code/name, jo veq me unitId
+      const u = `${it.unit?.code ?? ''} ${it.unit?.name ?? ''} ${it.unitId ?? ''}`.toLowerCase();
+
       const id = String(it._id).toLowerCase();
       return d.includes(term) || u.includes(term) || id.includes(term);
     });
@@ -190,8 +210,16 @@ export default function Approvals() {
     setViewRows(null);
     setViewOpen(true);
     setViewLoading(true);
+
     try {
       const full = await getReport(it._id);
+
+      // ✅ nëse getReport kthen unit edhe aty, e bashkojmë me meta
+      const fullUnit = (full as any)?.unit;
+      if (fullUnit) {
+        setViewMeta((prev) => (prev ? { ...prev, unit: fullUnit } : prev));
+      }
+
       setViewRows(Array.isArray((full as any)?.rows) ? (full as any).rows : []);
     } finally {
       setViewLoading(false);
@@ -228,7 +256,6 @@ export default function Approvals() {
       if (viewMeta?._id === id) {
         const full = await getReport(id);
         setViewRows(Array.isArray((full as any)?.rows) ? (full as any).rows : []);
-        // update meta in memory:
         setViewMeta((prev) =>
           prev ? { ...prev, status: actionType === 'approve' ? 'APPROVED' : 'REJECTED' } : prev,
         );
@@ -298,7 +325,7 @@ export default function Approvals() {
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="p.sh. 2026-02-12 ose 69260a..."
+                placeholder="p.sh. 2026-02-12 ose U-001 ose 69260a..."
                 className="w-full pl-10 pr-10 py-2 rounded-xl border border-gray-200 bg-white text-sm text-gray-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-[#C9A24D]/40"
               />
               {search && (
@@ -361,10 +388,14 @@ export default function Approvals() {
                 {filtered.map((it) => (
                   <tr key={it._id} className="hover:bg-gray-50/60">
                     <td className="py-3 px-4 font-mono text-gray-900">{fmtDate(it.date)}</td>
-                    <td className="py-3 px-4 text-gray-700">{String(it.unitId)}</td>
+
+                    {/* ✅ shfaq code/name nese ekziston, perndryshe fallback te unitId */}
+                    <td className="py-3 px-4 text-gray-700">{fmtUnit(it)}</td>
+
                     <td className="py-3 px-4">
                       <StatusPill status={it.status} />
                     </td>
+
                     <td className="py-3 px-4 font-mono text-gray-600">{String(it._id).slice(-12)}</td>
 
                     <td className="py-3 px-4">
@@ -425,7 +456,7 @@ export default function Approvals() {
         {viewMeta ? (
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
             <div className="text-sm text-gray-700">
-              Njësia: <span className="font-mono text-gray-900">{String(viewMeta.unitId)}</span>
+              Njësia: <span className="font-mono text-gray-900">{fmtUnit(viewMeta)}</span>
             </div>
             <StatusPill status={viewMeta.status} />
           </div>
@@ -447,6 +478,7 @@ export default function Approvals() {
                   <th className="py-3 px-3">Shënime</th>
                 </tr>
               </thead>
+
               <tbody className="divide-y">
                 {viewRows.map((r) => (
                   <tr key={r._id} className="hover:bg-gray-50/60">
@@ -454,12 +486,15 @@ export default function Approvals() {
                       <span className="font-mono">{r.personId?.serviceNo}</span> — {r.personId?.firstName}{' '}
                       {r.personId?.lastName}
                     </td>
+
                     <td className="py-3 px-3 text-gray-700">
                       <span className="font-mono">{r.categoryId?.code}</span> — {r.categoryId?.label}
                     </td>
+
                     <td className="py-3 px-3 text-gray-700 font-mono">
                       {fmtDate(r.from)} → {fmtDate(r.to)}
                     </td>
+
                     <td className="py-3 px-3 text-gray-700">{r.location ?? '—'}</td>
                     <td className="py-3 px-3 text-gray-700">{r.notes ?? '—'}</td>
                   </tr>
@@ -504,7 +539,7 @@ export default function Approvals() {
             {actionReport ? (
               <>
                 Raporti: <span className="font-mono">{fmtDate(actionReport.date)}</span> — Njësia:{' '}
-                <span className="font-mono">{String(actionReport.unitId)}</span>
+                <span className="font-mono">{fmtUnit(actionReport)}</span>
               </>
             ) : null}
           </div>
@@ -513,6 +548,7 @@ export default function Approvals() {
             <label className="text-xs font-semibold text-gray-600">
               {actionType === 'approve' ? 'Koment (opsional)' : 'Arsyeja e refuzimit (e detyrueshme)'}
             </label>
+
             <textarea
               value={comment}
               onChange={(e) => setComment(e.target.value)}
@@ -520,6 +556,7 @@ export default function Approvals() {
               placeholder={actionType === 'approve' ? 'Shkruaj koment...' : 'Shkruaj arsyen...'}
               className="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-[#C9A24D]/40"
             />
+
             {actionType === 'reject' ? (
               <div className="mt-1 text-[11px] text-gray-500">Minimum 2 karaktere.</div>
             ) : null}
@@ -538,9 +575,7 @@ export default function Approvals() {
               disabled={!actionReport || (actionReport && busyId === actionReport._id)}
               className={[
                 'px-3 py-2 rounded-xl text-sm font-semibold text-white shadow-sm disabled:opacity-50 disabled:cursor-not-allowed',
-                actionType === 'approve'
-                  ? 'bg-emerald-600 hover:bg-emerald-700'
-                  : 'bg-rose-600 hover:bg-rose-700',
+                actionType === 'approve' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-rose-600 hover:bg-rose-700',
               ].join(' ')}
             >
               {actionType === 'approve' ? 'Mirato' : 'Refuzo'}

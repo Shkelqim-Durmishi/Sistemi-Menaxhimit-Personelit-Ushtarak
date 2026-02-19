@@ -477,7 +477,12 @@ export default function App() {
                   <div className="text-sm font-semibold text-gray-900">{user.username}</div>
                   <div className="mt-0.5 text-[11px] uppercase tracking-wider text-gray-400">{formatRole(user.role)}</div>
                   <div className="mt-2 text-xs text-gray-600">
-                    Njësia: <span className="font-medium">{user.unitId ? user.unitId : '— (ADMIN / pa njësi)'}</span>
+                    Njësia:{' '}
+                    <span className="font-medium">
+                      {user?.unit?.code && user?.unit?.name
+                        ? `${user.unit.code} — ${user.unit.name}`
+                        : (user?.unit?.name || user?.unit?.code || '— (ADMIN / pa njësi)')}
+                    </span>
                   </div>
                 </>
               )}
