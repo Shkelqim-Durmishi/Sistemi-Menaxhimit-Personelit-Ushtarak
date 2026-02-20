@@ -11,8 +11,12 @@ type MeResponse = {
     role: string;
     unitId: string | null;
     mustChangePassword?: boolean;
+
     signatureImageUrl?: string | null;
     signatureSignedAt?: string | null;
+
+    // (optional) nese backend e kthen tash
+    unit?: { id: string; code?: string; name?: string } | null;
 };
 
 async function getMe(): Promise<MeResponse> {
@@ -21,10 +25,66 @@ async function getMe(): Promise<MeResponse> {
     return data as MeResponse;
 }
 
+/** ✅ Ikona Refresh (SVG) – s’kërkon asnjë library */
+function RefreshIcon({ className = '' }: { className?: string }) {
+    return (
+        <svg className={className} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path
+                d="M20 12a8 8 0 0 1-14.8 4M4 12a8 8 0 0 1 14.8-4"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+            />
+            <path
+                d="M20 4v6h-6"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+            />
+            <path
+                d="M4 20v-6h6"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+            />
+        </svg>
+    );
+}
+
+/** ✏️ Edit Icon */
+function EditIcon({ className = '' }: { className?: string }) {
+    return (
+        <svg className={className} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path
+                d="M4 20h4l10-10a2 2 0 0 0-4-4L4 16v4z"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+            />
+        </svg>
+    );
+}
+
+/** ➕ Plus Icon */
+function PlusIcon({ className = '' }: { className?: string }) {
+    return (
+        <svg className={className} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path
+                d="M12 5v14M5 12h14"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+            />
+        </svg>
+    );
+}
+
 export default function ProfilePage() {
     const localUser = getCurrentUser();
 
-    // nëse s’ka user lokal (nuk je login)
     if (!localUser) {
         return (
             <div className="bg-white p-4 rounded shadow">
@@ -33,8 +93,14 @@ export default function ProfilePage() {
         );
     }
 
-    // ✅ merr info nga backend (signatureImageUrl, signatureSignedAt)
-    const { data: me, isLoading, isError, refetch, dataUpdatedAt } = useQuery({
+    const {
+        data: me,
+        isLoading,
+        isError,
+        refetch,
+        isFetching,
+        dataUpdatedAt,
+    } = useQuery({
         queryKey: ['me'],
         queryFn: getMe,
         staleTime: 0,
@@ -43,7 +109,11 @@ export default function ProfilePage() {
 
     const username = me?.username ?? localUser.username ?? '—';
     const role = me?.role ?? localUser.role ?? '—';
-    const unitId = (me?.unitId ?? localUser.unitId ?? '—') as string;
+
+    const unitLabel =
+        me?.unit?.name
+            ? `${me?.unit?.code ? me.unit.code + ' — ' : ''}${me.unit.name}`
+            : me?.unitId ?? localUser.unitId ?? '—';
 
     // URL absolute (http://localhost:4000/uploads/...)
     const sigAbs = toPublicUrl(me?.signatureImageUrl ?? null);
@@ -52,13 +122,21 @@ export default function ProfilePage() {
     const sigUrl = useMemo(() => {
         if (!sigAbs) return null;
 
-        const stamp =
-            me?.signatureSignedAt
-                ? new Date(me.signatureSignedAt).getTime()
-                : dataUpdatedAt || Date.now();
+        const stamp = me?.signatureSignedAt
+            ? new Date(me.signatureSignedAt).getTime()
+            : dataUpdatedAt || Date.now();
 
         return `${sigAbs}${sigAbs.includes('?') ? '&' : '?'}t=${stamp}`;
     }, [sigAbs, me?.signatureSignedAt, dataUpdatedAt]);
+
+    const signatureStatusText = isLoading
+        ? 'Duke ngarkuar…'
+        : isError
+            ? 'S’u arrit me i marrë të dhënat e nënshkrimit.'
+            : sigUrl
+                ? `Vendosur më: ${me?.signatureSignedAt ? new Date(me.signatureSignedAt).toLocaleString() : '—'
+                }`
+                : 'Nuk keni vendosur ende nënshkrim.';
 
     return (
         <div className="space-y-4">
@@ -68,7 +146,7 @@ export default function ProfilePage() {
                 <div className="grid md:grid-cols-2 gap-4 text-sm">
                     <Field label="Username" value={username} />
                     <Field label="Roli" value={role} />
-                    <Field label="Njësia" value={unitId} />
+                    <Field label="Njësia" value={unitLabel} />
                 </div>
 
                 <div className="mt-4 text-xs text-gray-500">
@@ -78,35 +156,35 @@ export default function ProfilePage() {
 
             {/* ✅ NËNSHKRIMI */}
             <div className="bg-white p-4 rounded shadow border border-gray-100">
-                <div className="flex items-center justify-between gap-3">
+                <div className="flex items-start justify-between gap-3">
                     <div>
                         <div className="text-sm font-semibold text-gray-900">Nënshkrimi Digjital</div>
-                        <div className="text-xs text-gray-500">
-                            {isLoading
-                                ? 'Duke ngarkuar…'
-                                : isError
-                                    ? 'S’u arrit me i marrë të dhënat e nënshkrimit.'
-                                    : sigUrl
-                                        ? `Vendosur më: ${me?.signatureSignedAt ? new Date(me.signatureSignedAt).toLocaleString() : '—'
-                                        }`
-                                        : 'Nuk keni vendosur ende nënshkrim.'}
-                        </div>
+                        <div className="text-xs text-gray-500 mt-0.5">{signatureStatusText}</div>
                     </div>
 
                     <div className="flex items-center gap-2">
+                        {/* 🔄 Refresh - icon only */}
                         <button
                             onClick={() => refetch()}
-                            className="px-3 py-2 rounded border text-sm hover:bg-gray-50"
                             type="button"
+                            disabled={isFetching}
+                            title="Rifresko"
+                            className={[
+                                'h-9 w-9 flex items-center justify-center rounded-full border',
+                                'hover:bg-gray-100 active:bg-gray-200 transition',
+                                isFetching ? 'opacity-60 cursor-not-allowed' : '',
+                            ].join(' ')}
                         >
-                            Rifresko
+                            <RefreshIcon className={`h-4 w-4 ${isFetching ? 'animate-spin' : ''}`} />
                         </button>
 
+                        {/* ✏️ / ➕ Signature - icon only */}
                         <Link
                             to="/signature"
-                            className="px-3 py-2 rounded bg-gray-900 text-white text-sm hover:bg-gray-800"
+                            title={sigUrl ? 'Ndrysho nënshkrimin' : 'Vendos nënshkrimin'}
+                            className="h-9 w-9 flex items-center justify-center rounded-full bg-gray-900 text-white hover:bg-gray-800 transition"
                         >
-                            {sigUrl ? 'Ndrysho nënshkrimin' : 'Vendos nënshkrimin'}
+                            {sigUrl ? <EditIcon className="h-4 w-4" /> : <PlusIcon className="h-4 w-4" />}
                         </Link>
                     </div>
                 </div>
@@ -124,15 +202,15 @@ export default function ProfilePage() {
                                     alt="Nënshkrimi"
                                     className="w-full h-[180px] object-contain"
                                     onError={(e) => {
-                                        // nëse prapë s’po hapet, ta shohim në console URL-në reale
-                                        // eslint-disable-next-line no-console
                                         console.log('Signature image failed:', sigUrl);
                                         (e.currentTarget as HTMLImageElement).style.opacity = '0.3';
                                     }}
                                 />
                             </div>
 
-
+                            <div className="mt-2 text-xs text-gray-500">
+                                Nëse nuk e shihni menjëherë (cache), klikoni “Rifresko”.
+                            </div>
                         </div>
                     )}
                 </div>

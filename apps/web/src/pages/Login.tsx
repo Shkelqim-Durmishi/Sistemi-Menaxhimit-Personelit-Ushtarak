@@ -70,18 +70,25 @@ export default function Login() {
         }
     }
 
-    // ✅ FLOATING LABEL FIX (works even if tailwind doesn't support peer-not-placeholder-shown)
+    // ✅ Floating label (më lart + më clean)
     const floatingLabel = `
     absolute left-7 top-1/2 -translate-y-1/2
     text-sm text-gray-500 transition-all duration-200
     pointer-events-none
  
-    peer-focus:top-1 peer-focus:-translate-y-0 peer-focus:text-xs
- 
-    peer-[&:not(:placeholder-shown)]:top-1
-    peer-[&:not(:placeholder-shown)]:-translate-y-0
+    /* kur fokusohet ose ka tekst -> shkon më lart */
+    peer-focus:top-0 peer-focus:-translate-y-1 peer-focus:text-xs
+    peer-[&:not(:placeholder-shown)]:top-0
+    peer-[&:not(:placeholder-shown)]:-translate-y-1
     peer-[&:not(:placeholder-shown)]:text-xs
+ 
+    /* e bën ma clean (mos me u ngjit me tekstin) */
+    px-1 bg-white
   `;
+
+    // ✅ input padding: i jep vend label-it, teksti nuk i afrohet
+    const inputBase =
+        'peer w-full bg-transparent outline-none pt-5 pb-2 pl-7 border-b-2';
 
     return (
         <div className="min-h-screen flex flex-col items-center justify-center px-4 bg-[#f3f5f8]">
@@ -109,7 +116,8 @@ export default function Login() {
                                         value={username}
                                         onChange={(e) => setUsername(e.target.value)}
                                         placeholder=" "
-                                        className="peer w-full bg-transparent outline-none py-3 pl-7 border-b-2 border-red-300 focus:border-[#C9A24D]"
+                                        className={`${inputBase} border-red-300 focus:border-[#C9A24D]`}
+                                        autoComplete="username"
                                     />
                                     <label className={floatingLabel}>Username</label>
                                 </div>
@@ -122,7 +130,8 @@ export default function Login() {
                                         value={password}
                                         onChange={(e) => setPassword(e.target.value)}
                                         placeholder=" "
-                                        className="peer w-full bg-transparent outline-none py-3 pl-7 border-b-2 border-gray-300 focus:border-[#2F3E2E]"
+                                        className={`${inputBase} border-gray-300 focus:border-[#2F3E2E]`}
+                                        autoComplete="current-password"
                                     />
                                     <label className={floatingLabel}>Password</label>
                                 </div>
@@ -154,7 +163,8 @@ export default function Login() {
                                         value={newPassword}
                                         onChange={(e) => setNewPassword(e.target.value)}
                                         placeholder=" "
-                                        className="peer w-full bg-transparent outline-none py-3 pl-7 border-b-2 border-gray-300 focus:border-[#2F3E2E]"
+                                        className={`${inputBase} border-gray-300 focus:border-[#2F3E2E]`}
+                                        autoComplete="new-password"
                                     />
                                     <label className={floatingLabel}>Fjalëkalimi i ri</label>
                                 </div>
@@ -166,7 +176,8 @@ export default function Login() {
                                         value={newPassword2}
                                         onChange={(e) => setNewPassword2(e.target.value)}
                                         placeholder=" "
-                                        className="peer w-full bg-transparent outline-none py-3 pl-7 border-b-2 border-gray-300 focus:border-[#2F3E2E]"
+                                        className={`${inputBase} border-gray-300 focus:border-[#2F3E2E]`}
+                                        autoComplete="new-password"
                                     />
                                     <label className={floatingLabel}>Përsërit fjalëkalimin</label>
                                 </div>
@@ -190,9 +201,7 @@ export default function Login() {
                 </div>
             </div>
 
-            <div className="mt-6 text-xs text-gray-400">
-                © 2026 FSK • Sistemi i menaxhimit
-            </div>
+            <div className="mt-6 text-xs text-gray-400">© 2026 FSK • Sistemi i menaxhimit</div>
         </div>
     );
 }
