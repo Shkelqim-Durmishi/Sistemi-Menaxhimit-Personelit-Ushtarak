@@ -8,8 +8,7 @@ import geoip from 'geoip-lite';
 import { Types } from 'mongoose';
 
 import User from '../models/User';
-import Unit from '../models/Unit'; // ✅ NEW (siç the: models/units)
-
+import Unit from '../models/Unit';
 import { env } from '../config/env';
 import { requireAuth, requireRole, AuthUserPayload } from '../middleware/auth';
 import LoginAudit from '../models/LoginAudit';
@@ -79,7 +78,6 @@ function escapeRegExp(s: string) {
 }
 
 function fmtDate(d: Date = new Date()) {
-  // p.sh. 16.02.2026 16:33
   const pad = (n: number) => String(n).padStart(2, '0');
   const dd = pad(d.getDate());
   const mm = pad(d.getMonth() + 1);
@@ -172,7 +170,8 @@ function buildEmailHtml(opts: {
   footerNote?: string;
   severity?: 'info' | 'warning' | 'danger';
 }) {
-  const severityColor = opts.severity === 'danger' ? '#b91c1c' : opts.severity === 'warning' ? '#b45309' : '#0f172a';
+  const severityColor =
+    opts.severity === 'danger' ? '#b91c1c' : opts.severity === 'warning' ? '#b45309' : '#0f172a';
 
   return `
   <div style="font-family:Arial,Helvetica,sans-serif;background:#0b1220;padding:26px;">
@@ -205,7 +204,10 @@ function buildEmailHtml(opts: {
           </div>
         </div>
  
-        ${opts.footerNote ? `<p style="margin:14px 0 0;color:#334155;line-height:1.55;">${opts.footerNote}</p>` : ''}
+        ${opts.footerNote
+      ? `<p style="margin:14px 0 0;color:#334155;line-height:1.55;">${opts.footerNote}</p>`
+      : ''
+    }
  
         <hr style="border:none;border-top:1px solid #e2e8f0;margin:18px 0;" />
  
@@ -236,11 +238,10 @@ async function safeSendAdmin(subject: string, html: string) {
 async function getUnitBrief(unitId: any): Promise<{ id: string; code?: string; name?: string } | null> {
   try {
     if (!unitId) return null;
-    const u = await (Unit as any)
-      .findById(unitId)
-      .select('_id code name')
-      .lean();
+
+    const u = await (Unit as any).findById(unitId).select('_id code name').lean();
     if (!u) return null;
+
     return { id: String(u._id), code: u.code, name: u.name };
   } catch {
     return null;
@@ -270,7 +271,8 @@ r.post('/login', async (req, res) => {
     if (!ALLOWED_LOGIN_COUNTRIES.includes(country)) {
       const html = buildEmailHtml({
         title: 'NJOFTIM SIGURIE – Tentim Kyçjeje i Bllokuar',
-        intro: 'Ju njoftojmë se sistemi ka bllokuar një tentim kyçjeje nga një vend i paautorizuar, në përputhje me politikat e sigurisë.',
+        intro:
+          'Ju njoftojmë se sistemi ka bllokuar një tentim kyçjeje nga një vend i paautorizuar, në përputhje me politikat e sigurisë.',
         severity: 'danger',
         items: [
           { label: 'Lloji i aktivitetit', value: 'Tentim kyçjeje (GEO-BLOCK)' },
@@ -303,7 +305,8 @@ r.post('/login', async (req, res) => {
   if (!user) {
     const html = buildEmailHtml({
       title: 'NJOFTIM SIGURIE – Tentim Kyçjeje i Dyshimtë',
-      intro: 'U regjistrua një tentim kyçjeje me një username që nuk ekziston në sistem. Kjo mund të jetë përpjekje e paautorizuar.',
+      intro:
+        'U regjistrua një tentim kyçjeje me një username që nuk ekziston në sistem. Kjo mund të jetë përpjekje e paautorizuar.',
       severity: 'warning',
       items: [
         { label: 'Lloji i aktivitetit', value: 'Kyçje me username të panjohur' },
@@ -315,7 +318,6 @@ r.post('/login', async (req, res) => {
     });
 
     await safeSendAdmin('NJOFTIM SIGURIE – Tentim Kyçjeje me Username të Panohur', html);
-
     return res.status(401).json({ code: 'INVALID_CREDENTIALS' });
   }
 
@@ -325,7 +327,8 @@ r.post('/login', async (req, res) => {
   if (uAny.isBlocked) {
     const html = buildEmailHtml({
       title: 'NJOFTIM SIGURIE – Tentim Kyçjeje me Llogari të Bllokuar',
-      intro: 'U regjistrua një tentim kyçjeje në një llogari të bllokuar. Sistemi ka refuzuar aksesin sipas politikave të sigurisë.',
+      intro:
+        'U regjistrua një tentim kyçjeje në një llogari të bllokuar. Sistemi ka refuzuar aksesin sipas politikave të sigurisë.',
       severity: 'danger',
       items: [
         { label: 'Lloji i aktivitetit', value: 'Tentim kyçjeje (llogari e bllokuar)' },
@@ -366,7 +369,8 @@ r.post('/login', async (req, res) => {
     if (!justBlocked && uAny.failedLoginCount === FAILED_WARNING_THRESHOLD) {
       const html = buildEmailHtml({
         title: 'NJOFTIM SIGURIE – Tentativa të Shumta të Dështuara',
-        intro: 'Sistemi ka regjistruar tentativa të përsëritura kyçjeje me fjalëkalim të pasaktë. Rekomandohet verifikim i menjëhershëm.',
+        intro:
+          'Sistemi ka regjistruar tentativa të përsëritura kyçjeje me fjalëkalim të pasaktë. Rekomandohet verifikim i menjëhershëm.',
         severity: 'warning',
         items: [
           { label: 'Lloji i aktivitetit', value: 'Tentativa të dështuara (password i pasaktë)' },
@@ -414,7 +418,9 @@ r.post('/login', async (req, res) => {
     const now2 = new Date();
 
     if (uAny.contractValidFrom && now2 < uAny.contractValidFrom) {
-      return res.status(403).json({ code: 'CONTRACT_NOT_ACTIVE_YET', message: 'Ky përdorues nuk ka ende kontratë aktive.' });
+      return res
+        .status(403)
+        .json({ code: 'CONTRACT_NOT_ACTIVE_YET', message: 'Ky përdorues nuk ka ende kontratë aktive.' });
     }
 
     if (uAny.contractValidTo && now2 > uAny.contractValidTo) {
@@ -433,7 +439,8 @@ r.post('/login', async (req, res) => {
       if (!existingFromThisIp) {
         const html = buildEmailHtml({
           title: 'NJOFTIM ZYRTAR – Kyçje nga IP e Re',
-          intro: 'Ju njoftojmë se u regjistrua një kyçje nga një adresë IP e re për këtë llogari. Nëse kjo nuk është iniciuar nga ju, ndiqni udhëzimet e sigurisë.',
+          intro:
+            'Ju njoftojmë se u regjistrua një kyçje nga një adresë IP e re për këtë llogari. Nëse kjo nuk është iniciuar nga ju, ndiqni udhëzimet e sigurisë.',
           severity: 'info',
           items: [
             { label: 'Lloji i aktivitetit', value: 'Kyçje në sistem (IP e re)' },
@@ -443,7 +450,12 @@ r.post('/login', async (req, res) => {
             { label: 'Pajisja / Platforma', value: ua },
             {
               label: 'Njësia',
-              value: unitBrief?.code || unitBrief?.name ? `${unitBrief?.code ?? ''}${unitBrief?.code && unitBrief?.name ? ' — ' : ''}${unitBrief?.name ?? ''}` : (user.unitId ? String(user.unitId) : '—'),
+              value:
+                unitBrief?.code || unitBrief?.name
+                  ? `${unitBrief?.code ?? ''}${unitBrief?.code && unitBrief?.name ? ' — ' : ''}${unitBrief?.name ?? ''}`
+                  : user.unitId
+                    ? String(user.unitId)
+                    : '—',
             },
           ],
         });
@@ -487,18 +499,23 @@ r.post('/login', async (req, res) => {
     console.error('LoginAudit error (LOGIN):', e);
   }
 
-  // ✅ RETURN: kthe unit (code/name) që frontend mos me shfaq ID
+  // ✅ RETURN: kthe edhe fushat e signature që frontend me bo redirect
   return res.json({
     token,
     user: {
       id: user._id,
       username: user.username,
       role: user.role,
-
       unitId: user.unitId ?? null,
-      unit: unitBrief, // ✅ NEW (id/code/name)
+      unit: unitBrief, // ✅ (id/code/name)
 
       mustChangePassword: uAny.mustChangePassword ?? false,
+
+      // ✅ signature fields (E RËNDËSISHME)
+      signatureImageUrl: uAny.signatureImageUrl ?? null,
+      signatureSignedAt: uAny.signatureSignedAt ?? null,
+
+      // kontrata
       contractValidFrom: uAny.contractValidFrom ?? null,
       contractValidTo: uAny.contractValidTo ?? null,
       neverExpires: uAny.neverExpires ?? true,
@@ -627,7 +644,9 @@ r.post('/change-password-first', async (req, res) => {
 
   if (!uAny.neverExpires) {
     if (uAny.contractValidFrom && now < uAny.contractValidFrom) {
-      return res.status(403).json({ code: 'CONTRACT_NOT_ACTIVE_YET', message: 'Ky përdorues nuk ka ende kontratë aktive.' });
+      return res
+        .status(403)
+        .json({ code: 'CONTRACT_NOT_ACTIVE_YET', message: 'Ky përdorues nuk ka ende kontratë aktive.' });
     }
 
     if (uAny.contractValidTo && now > uAny.contractValidTo) {
@@ -649,7 +668,8 @@ r.post('/change-password-first', async (req, res) => {
 ===================== */
 
 r.post('/register', requireAuth, requireRole('ADMIN'), async (req, res) => {
-  const { username, password, role, unitId, contractValidFrom, contractValidTo, neverExpires, mustChangePassword } = req.body ?? {};
+  const { username, password, role, unitId, contractValidFrom, contractValidTo, neverExpires, mustChangePassword } =
+    req.body ?? {};
 
   const uName = String(username ?? '').trim();
   const pw = String(password ?? '');
@@ -698,9 +718,12 @@ r.post('/register', requireAuth, requireRole('ADMIN'), async (req, res) => {
     neverExpires: neverExp,
 
     mustChangePassword: !!mustChangePassword,
+
+    // ✅ signature default
+    signatureImageUrl: null,
+    signatureSignedAt: null,
   });
 
-  // ✅ kthe edhe unit-in (opsional) që admin UI me pas info
   const unitBrief = await getUnitBrief(u.unitId);
 
   return res.status(201).json({
@@ -708,7 +731,7 @@ r.post('/register', requireAuth, requireRole('ADMIN'), async (req, res) => {
     username: u.username,
     role: u.role,
     unitId: u.unitId ?? null,
-    unit: unitBrief, // ✅ NEW
+    unit: unitBrief,
   });
 });
 

@@ -1,3 +1,4 @@
+// apps/api/src/models/User.ts
 import { Schema, model, Types } from 'mongoose';
 
 const UserSchema = new Schema(
@@ -38,6 +39,16 @@ const UserSchema = new Schema(
     // (p.sh. login i parë, ose pasi ADMIN ia ka reset-uar password-in)
     mustChangePassword: { type: Boolean, default: false },
 
+    // ✍️ Nënshkrimi digjital (ruajtur si DataURL PNG ose URL)
+    // p.sh. "data:image/png;base64,...." ose "/uploads/signatures/userId.png"
+    signatureImageUrl: { type: String, default: null },
+
+    // kur u vendos nënshkrimi për herë të fundit
+    signatureSignedAt: { type: Date, default: null },
+
+    // (opsionale) nëse do ta detyrosh user-in të vendos nënshkrim para se me vazhdu
+    // signatureRequired: { type: Boolean, default: false },
+
     // 📅 Afati i kontratës
     // Nëse neverExpires = true → këto dy mund të jenë null dhe user-i s’ka afat skadimi
     contractValidFrom: { type: Date, default: null }, // kur fillon kontrata
@@ -56,6 +67,9 @@ UserSchema.index({ unitId: 1 });
 
 // shpesh na duhet lista e user-ave të bllokuar
 UserSchema.index({ isBlocked: 1 });
+
+// shpesh na duhet me gjet user-a pa nënshkrim (për detyrim / audit)
+UserSchema.index({ signatureImageUrl: 1 });
 
 // (opsionale) për query të shpejta mbi kontratat
 // UserSchema.index({ contractValidFrom: 1, contractValidTo: 1, neverExpires: 1 });

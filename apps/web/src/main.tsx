@@ -1,5 +1,4 @@
 // src/main.tsx
-
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
@@ -17,15 +16,14 @@ import PeoplePage from './pages/People';
 import PeoplePendingPage from './pages/PeoplePending';
 import Requests from './pages/Requests';
 
-// ✅ NEW – GPS Vehicles Live
 import VehiclesLive from './pages/VehiclesLive';
 
-// ✅ NEW – Profile + Change Password
 import ProfilePage from './pages/profile';
 import ChangePasswordPage from './pages/change-password';
-
-// ✅ NEW – System Notice Admin (vetëm ADMIN)
 import SystemNoticeAdminPage from './pages/SystemNoticeAdminPage';
+
+// ✅ ADD THIS
+import SignaturePage from './pages/SignaturePage';
 
 import './index.css';
 import { getCurrentUser } from './lib/api';
@@ -90,6 +88,16 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
               element={
                 <RequireAuth>
                   <ProfilePage />
+                </RequireAuth>
+              }
+            />
+
+            {/* ✅ SIGNATURE */}
+            <Route
+              path="signature"
+              element={
+                <RequireAuth>
+                  <SignaturePage />
                 </RequireAuth>
               }
             />
