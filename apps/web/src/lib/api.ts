@@ -805,3 +805,33 @@ export async function getApprovalsCount(): Promise<number> {
 
     return extractTotal(data);
 }
+
+export async function saveMySignature(dataUrl: string) {
+    const { data } = await api.put('/me/signature', { dataUrl });
+    return data as { ok: true; signatureImageUrl: string; signatureSignedAt: string };
+}
+
+export async function deleteMySignature() {
+    const { data } = await api.delete('/me/signature');
+    return data as { ok: true };
+}
+
+
+// ✅ ME profile (with signature)
+export type MeProfile = {
+    id: string;
+    username: string;
+    role: UserRole;
+    unitId: string | null;
+    mustChangePassword?: boolean;
+
+    signatureImageUrl?: string | null;
+    signatureSignedAt?: string | null;
+};
+
+export async function getMe() {
+    const { data } = await api.get('/me', { params: { t: Date.now() } });
+    return data as MeProfile;
+}
+
+

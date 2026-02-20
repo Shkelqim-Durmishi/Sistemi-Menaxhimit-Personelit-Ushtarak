@@ -22,6 +22,7 @@ import loginAuditRoutes from './routes/loginAudit.routes';
 import requestsRoutes from './routes/requests.routes';
 import vehicleRoutes from './routes/vehicles.routes';
 import systemNoticeRoutes from './routes/systemNotice.routes';
+import meRoutes from './routes/me.routes';
 
 // *** ROUTA TESTUESE PER EMAIL ***
 import testEmailRoutes from './routes/testEmail.routes';
@@ -34,7 +35,18 @@ const app = express();
  */
 app.set('trust proxy', true);
 
-app.use(helmet());
+/**
+ * ✅ Helmet:
+ * - crossOriginResourcePolicy "cross-origin" e lejon <img> nga origin tjetër (5173) me e marrë nga 4000
+ * - (opsionale) crossOriginEmbedderPolicy false për dev (shmang bllokime të panevojshme)
+ */
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+    crossOriginEmbedderPolicy: false,
+  })
+);
+
 app.use(morgan('dev'));
 
 // ✅ rrit limit për JSON (p.sh. base64 ose payload më të mëdha)
@@ -66,6 +78,7 @@ app.use('/api/requests', requestsRoutes);
 app.use('/api/vehicles', vehicleRoutes);
 app.use('/api/test-email', testEmailRoutes);
 app.use('/api/system-notice', systemNoticeRoutes);
+app.use('/api/me', meRoutes);
 
 // START SERVER
 connectDB(env.MONGODB_URI).then(() => {

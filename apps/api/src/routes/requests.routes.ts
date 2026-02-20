@@ -40,6 +40,24 @@ const allowedTypes = [
 
 type AllowedType = (typeof allowedTypes)[number];
 
+/**
+ * ✅ Signature policy
+ * - nëse TRUE: user-at s’mund të krijojnë/aprovojnë/refuzojnë pa signatureImageUrl
+ */
+const REQUIRE_SIGNATURE = true;
+
+async function requireMeHasSignature(me: AuthUserPayload) {
+    if (!REQUIRE_SIGNATURE) return;
+
+    const u = await User.findById(me.id).select('_id signatureImageUrl').lean();
+    const sig = String((u as any)?.signatureImageUrl ?? '').trim();
+    if (!sig) {
+        const err: any = new Error('SIGNATURE_REQUIRED');
+        err.code = 'SIGNATURE_REQUIRED';
+        throw err;
+    }
+}
+
 function pickAllowedPersonPatch(patch: any) {
     const out: any = {};
     if (!patch || typeof patch !== 'object') return out;
@@ -63,6 +81,7 @@ function pickAllowedPersonPatch(patch: any) {
     for (const k of allow) {
         if (k in patch) out[k] = patch[k];
     }
+
     return out;
 }
 
@@ -158,6 +177,7 @@ function drawHeader(doc: PDFKit.PDFDocument, opts: { leftLogo?: string | null; r
 
     const top = 50;
     const logoW = 70;
+
     const leftLogoX = marginL;
     const rightLogoX = pageW - marginR - logoW;
 
@@ -264,6 +284,61 @@ function writeDecisionLine(doc: PDFKit.PDFDocument, decisionWord: 'APROVOHET' | 
 }
 
 /**
+ * ✅ Load signature image for PDFKit
+ * supports:
+ *  - data:image/png;base64,...
+ *  - /uploads/... (relative to project root)
+ *  - absolute path
+ */
+function resolveSignatureSource(signatureImageUrl?: string | null): { kind: 'buffer'; data: Buffer } | { kind: 'path'; data: string } | null {
+    const s = String(signatureImageUrl ?? '').trim();
+    if (!s) return null;
+
+    if (s.startsWith('data:image/')) {
+        const comma = s.indexOf(',');
+        if (comma === -1) return null;
+        const b64 = s.slice(comma + 1).trim();
+        if (!b64) return null;
+        try {
+            return { kind: 'buffer', data: Buffer.from(b64, 'base64') };
+        } catch {
+            return null;
+        }
+    }
+
+    // local path like /uploads/...
+    let p = s;
+    if (p.startsWith('/')) {
+        p = path.join(process.cwd(), p.replace(/^\//, ''));
+    }
+
+    // allow relative file path too
+    if (!path.isAbsolute(p)) {
+        p = path.join(process.cwd(), p);
+    }
+
+    if (!fssync.existsSync(p)) return null;
+    return { kind: 'path', data: p };
+}
+
+function drawSignatureImage(
+    doc: PDFKit.PDFDocument,
+    sig: { kind: 'buffer'; data: Buffer } | { kind: 'path'; data: string },
+    box: { x: number; y: number; w: number; h: number }
+) {
+    try {
+        // PDFKit: use "fit" to keep proportions
+        if (sig.kind === 'buffer') {
+            doc.image(sig.data, box.x, box.y, { fit: [box.w, box.h], align: 'center', valign: 'center' } as any);
+        } else {
+            doc.image(sig.data, box.x, box.y, { fit: [box.w, box.h], align: 'center', valign: 'center' } as any);
+        }
+    } catch {
+        // ignore
+    }
+}
+
+/**
  * Gjeneron PDF për një ChangeRequest dhe kthen url lokale: /uploads/requests/<file>.pdf
  */
 async function generateRequestPdf(opts: {
@@ -291,6 +366,9 @@ async function generateRequestPdf(opts: {
 
     const createdBy = opts.createdBySnap || reqDoc.createdBy || {};
     const decidedBy = opts.decidedBySnap || reqDoc.decidedBy || {};
+
+    const createdSigSrc = resolveSignatureSource((createdBy as any)?.signatureImageUrl);
+    const decidedSigSrc = resolveSignatureSource((decidedBy as any)?.signatureImageUrl);
 
     const personLine = buildPersonLine(personBefore, reqDoc.personId);
 
@@ -401,10 +479,7 @@ async function generateRequestPdf(opts: {
         }
 
         if (decisionNote) {
-            doc
-                .font('Times-Bold')
-                .fontSize(11)
-                .text(status === 'REJECTED' ? 'Arsyeja e refuzimit:' : 'Shënim vendimi:');
+            doc.font('Times-Bold').fontSize(11).text(status === 'REJECTED' ? 'Arsyeja e refuzimit:' : 'Shënim vendimi:');
             doc.font('Times-Roman').fontSize(11).text(decisionNote, { align: 'justify', lineGap: 3 });
             doc.moveDown(0.8);
         }
@@ -426,27 +501,40 @@ async function generateRequestPdf(opts: {
         const rightLineStartX = rightLineEndX - rightLineWidth;
         const lineY = footerTopY;
 
+        // draw signature images ABOVE the line (so it looks like real signing)
+        const sigBoxH = 38;
+        const sigBoxY = lineY - sigBoxH - 6;
+
+        if (createdSigSrc) {
+            drawSignatureImage(doc, createdSigSrc, { x: leftX, y: sigBoxY, w: leftLineWidth, h: sigBoxH });
+        }
+
+        // only show decided signature if there is a decidedBy and status is final
+        const showDecidedSig = (status === 'APPROVED' || status === 'REJECTED') && safeText((decidedBy as any)?.username);
+        if (showDecidedSig && decidedSigSrc) {
+            drawSignatureImage(doc, decidedSigSrc, { x: rightLineStartX, y: sigBoxY, w: rightLineWidth, h: sigBoxH });
+        }
+
+        // lines
         doc.save();
         doc.strokeColor('#9aa0a6').lineWidth(1);
-
         doc.moveTo(leftX, lineY).lineTo(leftX + leftLineWidth, lineY).stroke();
         doc.moveTo(rightLineStartX, lineY).lineTo(rightLineEndX, lineY).stroke();
-
         doc.restore();
 
         const textY = lineY + 8;
 
         doc.font('Times-Bold').fontSize(11);
-        doc.text(safeText(createdBy.username) || '—', leftX, textY, { width: leftLineWidth, align: 'center' });
+        doc.text(safeText((createdBy as any).username) || '—', leftX, textY, { width: leftLineWidth, align: 'center' });
 
         doc.font('Times-Italic').fontSize(9);
-        doc.text(`(${safeText(createdBy.role) || '—'})`, leftX, textY + 13, { width: leftLineWidth, align: 'center' });
+        doc.text(`(${safeText((createdBy as any).role) || '—'})`, leftX, textY + 13, { width: leftLineWidth, align: 'center' });
 
         doc.font('Times-Bold').fontSize(11);
-        doc.text(safeText(decidedBy.username) || '—', rightLineStartX, textY, { width: rightLineWidth, align: 'center' });
+        doc.text(safeText((decidedBy as any).username) || '—', rightLineStartX, textY, { width: rightLineWidth, align: 'center' });
 
         doc.font('Times-Italic').fontSize(9);
-        doc.text(`(${safeText(decidedBy.role) || '—'})`, rightLineStartX, textY + 13, {
+        doc.text(`(${safeText((decidedBy as any).role) || '—'})`, rightLineStartX, textY + 13, {
             width: rightLineWidth,
             align: 'center',
         });
@@ -494,6 +582,16 @@ async function canAccessRequest(me: AuthUserPayload, doc: any) {
 
 r.post('/', requireAuth, requireRole('OPERATOR', 'OFFICER', 'ADMIN', 'COMMANDER'), async (req: any, res) => {
     const me = req.user as AuthUserPayload;
+
+    try {
+        // ✅ enforce signature for creating requests (optional policy)
+        await requireMeHasSignature(me);
+    } catch (e: any) {
+        if (e?.code === 'SIGNATURE_REQUIRED') {
+            return res.status(400).json({ code: 'SIGNATURE_REQUIRED', message: 'Duhet të vendosni nënshkrimin digjital para se të vazhdoni.' });
+        }
+    }
+
     const { type, personId, payload } = req.body ?? {};
 
     if (!type) {
@@ -557,7 +655,7 @@ r.post('/', requireAuth, requireRole('OPERATOR', 'OFFICER', 'ADMIN', 'COMMANDER'
 
         const out = await ChangeRequest.findById(doc._id)
             .populate('targetUnitId', 'code name')
-            .populate('createdBy', 'username role unitId')
+            .populate('createdBy', 'username role unitId signatureImageUrl')
             .lean();
 
         return res.status(201).json(out);
@@ -650,7 +748,7 @@ r.post('/', requireAuth, requireRole('OPERATOR', 'OFFICER', 'ADMIN', 'COMMANDER'
         .populate('personId', 'serviceNo firstName lastName unitId gradeId status')
         .populate('targetUnitId', 'code name')
         .populate('payload.toUnitId', 'code name')
-        .populate('createdBy', 'username role unitId')
+        .populate('createdBy', 'username role unitId signatureImageUrl')
         .lean();
 
     res.status(201).json(out);
@@ -682,8 +780,8 @@ r.get('/my', requireAuth, requireRole('OPERATOR', 'OFFICER', 'ADMIN', 'AUDITOR')
             .populate('personId', 'serviceNo firstName lastName unitId gradeId status')
             .populate('targetUnitId', 'code name')
             .populate('payload.toUnitId', 'code name')
-            .populate('createdBy', 'username role unitId')
-            .populate('decidedBy', 'username role')
+            .populate('createdBy', 'username role unitId signatureImageUrl')
+            .populate('decidedBy', 'username role signatureImageUrl')
             .lean(),
         ChangeRequest.countDocuments(filter),
     ]);
@@ -722,8 +820,8 @@ async function incomingHandler(req: any, res: any) {
             .populate('personId', 'serviceNo firstName lastName unitId gradeId status')
             .populate('targetUnitId', 'code name')
             .populate('payload.toUnitId', 'code name')
-            .populate('createdBy', 'username role unitId')
-            .populate('decidedBy', 'username role')
+            .populate('createdBy', 'username role unitId signatureImageUrl')
+            .populate('decidedBy', 'username role signatureImageUrl')
             .lean(),
         ChangeRequest.countDocuments(filter),
     ]);
@@ -749,8 +847,8 @@ r.get('/:id', requireAuth, requireRole('COMMANDER', 'ADMIN', 'AUDITOR', 'OFFICER
         .populate('personId', 'serviceNo firstName lastName unitId gradeId status')
         .populate('targetUnitId', 'code name')
         .populate('payload.toUnitId', 'code name')
-        .populate('createdBy', 'username role unitId')
-        .populate('decidedBy', 'username role')
+        .populate('createdBy', 'username role unitId signatureImageUrl')
+        .populate('decidedBy', 'username role signatureImageUrl')
         .lean();
 
     if (!doc) return res.status(404).json({ code: 'NOT_FOUND' });
@@ -772,12 +870,14 @@ r.get('/:id/pdf', requireAuth, requireRole('COMMANDER', 'ADMIN', 'AUDITOR', 'OFF
         return res.status(400).json({ code: 'VALIDATION_ERROR', message: 'Invalid id' });
     }
 
+    const refresh = String(req.query.refresh ?? '') === '1' || String(req.query.refresh ?? '') === 'true';
+
     const doc: any = await ChangeRequest.findById(req.params.id)
         .populate('personId', 'serviceNo firstName lastName unitId gradeId status')
         .populate('targetUnitId', 'code name')
         .populate('payload.toUnitId', 'code name')
-        .populate('createdBy', 'username role unitId')
-        .populate('decidedBy', 'username role')
+        .populate('createdBy', 'username role unitId signatureImageUrl')
+        .populate('decidedBy', 'username role signatureImageUrl')
         .lean();
 
     if (!doc) return res.status(404).json({ code: 'NOT_FOUND' });
@@ -785,13 +885,14 @@ r.get('/:id/pdf', requireAuth, requireRole('COMMANDER', 'ADMIN', 'AUDITOR', 'OFF
     const ok = await canAccessRequest(me, doc);
     if (!ok) return res.status(403).json({ code: 'FORBIDDEN' });
 
-    if (!doc?.pdf?.path) {
+    // regenerate when missing OR refresh=true
+    if (!doc?.pdf?.path || refresh) {
         const fresh: any = await ChangeRequest.findById(req.params.id)
             .populate('personId', 'serviceNo firstName lastName unitId gradeId status')
             .populate('targetUnitId', 'code name')
             .populate('payload.toUnitId', 'code name')
-            .populate('createdBy', 'username role unitId')
-            .populate('decidedBy', 'username role')
+            .populate('createdBy', 'username role unitId signatureImageUrl')
+            .populate('decidedBy', 'username role signatureImageUrl')
             .lean();
 
         const gen = await generateRequestPdf({ reqDoc: fresh });
@@ -829,6 +930,15 @@ r.post('/:id/approve', requireAuth, requireRole('COMMANDER', 'ADMIN'), async (re
     const me = req.user as AuthUserPayload;
     const { note } = req.body ?? {};
 
+    // ✅ require signature for approver
+    try {
+        await requireMeHasSignature(me);
+    } catch (e: any) {
+        if (e?.code === 'SIGNATURE_REQUIRED') {
+            return res.status(400).json({ code: 'SIGNATURE_REQUIRED', message: 'Duhet të vendosni nënshkrimin digjital para se të aprovoni.' });
+        }
+    }
+
     if (!isValidObjectId(req.params.id)) {
         return res.status(400).json({ code: 'VALIDATION_ERROR', message: 'Invalid id' });
     }
@@ -853,6 +963,7 @@ r.post('/:id/approve', requireAuth, requireRole('COMMANDER', 'ADMIN'), async (re
         }
 
         const u = doc.payload?.user ?? {};
+
         const username = String(u?.username ?? '').trim();
         const email = String(u?.email ?? '').trim();
         const role = String(u?.role ?? '').trim();
@@ -936,10 +1047,23 @@ r.post('/:id/approve', requireAuth, requireRole('COMMANDER', 'ADMIN'), async (re
             emailSent = false;
         }
 
+        // ✅ regenerate PDF now that decision exists (with signatures)
+        const fullForPdf = await ChangeRequest.findById(doc._id)
+            .populate('targetUnitId', 'code name')
+            .populate('createdBy', 'username role unitId signatureImageUrl')
+            .populate('decidedBy', 'username role signatureImageUrl')
+            .lean();
+
+        const gen = await generateRequestPdf({ reqDoc: fullForPdf });
+
+        doc.docNo = gen.docNo;
+        doc.pdf = { path: gen.publicPath, generatedAt: new Date() };
+        await doc.save();
+
         const out = await ChangeRequest.findById(doc._id)
             .populate('targetUnitId', 'code name')
-            .populate('createdBy', 'username role unitId')
-            .populate('decidedBy', 'username role')
+            .populate('createdBy', 'username role unitId signatureImageUrl')
+            .populate('decidedBy', 'username role signatureImageUrl')
             .lean();
 
         // ✅ DEV helper (mundesh me e hjek në PROD)
@@ -1023,8 +1147,8 @@ r.post('/:id/approve', requireAuth, requireRole('COMMANDER', 'ADMIN'), async (re
         .populate('personId', 'serviceNo firstName lastName unitId gradeId status')
         .populate('targetUnitId', 'code name')
         .populate('payload.toUnitId', 'code name')
-        .populate('createdBy', 'username role unitId')
-        .populate('decidedBy', 'username role')
+        .populate('createdBy', 'username role unitId signatureImageUrl')
+        .populate('decidedBy', 'username role signatureImageUrl')
         .lean();
 
     const gen = await generateRequestPdf({
@@ -1041,8 +1165,8 @@ r.post('/:id/approve', requireAuth, requireRole('COMMANDER', 'ADMIN'), async (re
         .populate('personId', 'serviceNo firstName lastName unitId gradeId status')
         .populate('targetUnitId', 'code name')
         .populate('payload.toUnitId', 'code name')
-        .populate('createdBy', 'username role unitId')
-        .populate('decidedBy', 'username role')
+        .populate('createdBy', 'username role unitId signatureImageUrl')
+        .populate('decidedBy', 'username role signatureImageUrl')
         .lean();
 
     res.json(out);
@@ -1055,6 +1179,15 @@ r.post('/:id/approve', requireAuth, requireRole('COMMANDER', 'ADMIN'), async (re
 r.post('/:id/reject', requireAuth, requireRole('COMMANDER', 'ADMIN'), async (req: any, res) => {
     const me = req.user as AuthUserPayload;
     const { note } = req.body ?? {};
+
+    // ✅ require signature for rejector
+    try {
+        await requireMeHasSignature(me);
+    } catch (e: any) {
+        if (e?.code === 'SIGNATURE_REQUIRED') {
+            return res.status(400).json({ code: 'SIGNATURE_REQUIRED', message: 'Duhet të vendosni nënshkrimin digjital para se të refuzoni.' });
+        }
+    }
 
     if (!isValidObjectId(req.params.id)) {
         return res.status(400).json({ code: 'VALIDATION_ERROR', message: 'Invalid id' });
@@ -1087,8 +1220,8 @@ r.post('/:id/reject', requireAuth, requireRole('COMMANDER', 'ADMIN'), async (req
         .populate('personId', 'serviceNo firstName lastName unitId gradeId status')
         .populate('targetUnitId', 'code name')
         .populate('payload.toUnitId', 'code name')
-        .populate('createdBy', 'username role unitId')
-        .populate('decidedBy', 'username role')
+        .populate('createdBy', 'username role unitId signatureImageUrl')
+        .populate('decidedBy', 'username role signatureImageUrl')
         .lean();
 
     const gen = await generateRequestPdf({
@@ -1104,8 +1237,8 @@ r.post('/:id/reject', requireAuth, requireRole('COMMANDER', 'ADMIN'), async (req
         .populate('personId', 'serviceNo firstName lastName unitId gradeId status')
         .populate('targetUnitId', 'code name')
         .populate('payload.toUnitId', 'code name')
-        .populate('createdBy', 'username role unitId')
-        .populate('decidedBy', 'username role')
+        .populate('createdBy', 'username role unitId signatureImageUrl')
+        .populate('decidedBy', 'username role signatureImageUrl')
         .lean();
 
     res.json(out);
@@ -1146,8 +1279,8 @@ r.post('/:id/cancel', requireAuth, requireRole('OPERATOR', 'OFFICER', 'ADMIN'), 
         .populate('personId', 'serviceNo firstName lastName unitId gradeId status')
         .populate('targetUnitId', 'code name')
         .populate('payload.toUnitId', 'code name')
-        .populate('createdBy', 'username role unitId')
-        .populate('decidedBy', 'username role')
+        .populate('createdBy', 'username role unitId signatureImageUrl')
+        .populate('decidedBy', 'username role signatureImageUrl')
         .lean();
 
     res.json(out);
