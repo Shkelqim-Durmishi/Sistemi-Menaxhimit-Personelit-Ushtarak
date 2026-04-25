@@ -11,7 +11,8 @@ export type ChangeRequestType =
     | 'CHANGE_UNIT'
     | 'DEACTIVATE_PERSON'
     | 'UPDATE_PERSON'
-    | 'CREATE_USER'; // ✅ NEW (admin-only flow)
+    | 'CREATE_USER'
+    | 'CREATE_UNIT';
 
 export type ChangeRequestStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED';
 
@@ -26,7 +27,8 @@ const ChangeRequestSchema = new Schema(
                 'CHANGE_UNIT',
                 'DEACTIVATE_PERSON',
                 'UPDATE_PERSON',
-                'CREATE_USER', // ✅ NEW
+                'CREATE_USER',
+                'CREATE_UNIT',
             ],
             required: true,
             index: true,
@@ -51,9 +53,9 @@ const ChangeRequestSchema = new Schema(
         createdByUnitId: { type: Types.ObjectId, ref: 'Unit', default: null, index: true },
 
         /**
-         * ✅ personId
+         * personId
          * - për request-at e personit është required
-         * - për CREATE_USER është NULL
+         * - për CREATE_USER dhe CREATE_UNIT është NULL
          */
         personId: {
             type: Types.ObjectId,
@@ -61,16 +63,16 @@ const ChangeRequestSchema = new Schema(
             default: null,
             index: true,
             required: function (this: any) {
-                return this.type !== 'CREATE_USER';
+                return this.type !== 'CREATE_USER' && this.type !== 'CREATE_UNIT';
             },
         },
 
         /**
-         * ✅ Routing
+         * Routing
          * - targetUnitId: për request-at e personit (inbox komandantit)
          * - targetRole: kur është 'ADMIN' -> admin-only inbox
          */
-        targetUnitId: { type: Types.ObjectId, ref: 'Unit', required: true, index: true },
+        targetUnitId: { type: Types.ObjectId, ref: 'Unit', default: null, index: true },
 
         targetRole: {
             type: String,
@@ -87,20 +89,26 @@ const ChangeRequestSchema = new Schema(
             // change grade
             newGradeId: { type: String, default: null },
 
-            // arsye / shenime (operator/commander)
+            // arsye / shenime
             reason: { type: String, default: '' },
 
             /**
-             * ✅ UPDATE_PERSON
+             * UPDATE_PERSON
              * payload.meta.patch = { firstName, lastName, phone, city, ... }
              */
             meta: { type: Schema.Types.Mixed, default: {} },
 
             /**
-             * ✅ CREATE_USER
+             * CREATE_USER
              * payload.user = { username, email, role, unitId, contractValidFrom, contractValidTo, neverExpires, mustChangePassword }
              */
             user: { type: Schema.Types.Mixed, default: null },
+
+            /**
+             * CREATE_UNIT
+             * payload.unit = { code, name, parentId }
+             */
+            unit: { type: Schema.Types.Mixed, default: null },
         },
 
         // vendimi

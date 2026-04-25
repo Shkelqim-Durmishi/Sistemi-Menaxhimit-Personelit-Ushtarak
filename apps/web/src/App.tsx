@@ -101,7 +101,6 @@ const LS_PREFIX = 'sm_seen_total_v1';
 type SeenKey = 'pendingPeople' | 'requests' | 'approvals';
 
 function keyFor(userId: string | null | undefined, k: SeenKey) {
-  // në rast se s’ka user (nuk duhet në app shell), ruaj veç “anon”
   const uid = userId || 'anon';
   return `${LS_PREFIX}:${uid}:${k}`;
 }
@@ -148,6 +147,7 @@ export default function App() {
   const canSeePeople = isAdmin || isOfficer || isOperator || isCommander;
   const canSeePeoplePending = isAdmin || isCommander;
   const canSeeRequests = isAdmin || isAuditor || isCommander || isOfficer || isOperator;
+  const canSeeApprovals = isAdmin || isCommander || isAuditor;
   const canSeeVehiclesLive = isAdmin || isCommander;
 
   const canUseSearch = canSeePeople;
@@ -282,7 +282,7 @@ export default function App() {
         const [p, r, a] = await Promise.all([
           canSeePeoplePending && typeof fnPending === 'function' ? fnPending() : 0,
           canSeeRequests && typeof fnReq === 'function' ? fnReq() : 0,
-          typeof fnAppr === 'function' ? fnAppr() : 0,
+          canSeeApprovals && typeof fnAppr === 'function' ? fnAppr() : 0,
         ]);
 
         if (!mounted) return;
@@ -303,7 +303,7 @@ export default function App() {
       mounted = false;
       window.clearInterval(t);
     };
-  }, [canSeePeoplePending, canSeeRequests]);
+  }, [canSeePeoplePending, canSeeRequests, canSeeApprovals]);
 
   // ✅ Ack per user vetëm kur ai user e hap faqen
   useEffect(() => {
@@ -315,11 +315,11 @@ export default function App() {
     if (path.startsWith('/requests')) {
       writeSeen(keyFor(userId, 'requests'), counts.requestsTotal);
     }
-    if (path.startsWith('/approvals')) {
+    if (canSeeApprovals && path.startsWith('/approvals')) {
       writeSeen(keyFor(userId, 'approvals'), counts.approvalsTotal);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loc.pathname, userId, counts.pendingPeopleTotal, counts.requestsTotal, counts.approvalsTotal]);
+  }, [loc.pathname, userId, counts.pendingPeopleTotal, counts.requestsTotal, counts.approvalsTotal, canSeeApprovals]);
 
   // ✅ seen totals per user
   const seenPendingPeople = useMemo(() => readSeen(keyFor(userId, 'pendingPeople')), [userId]);
@@ -328,7 +328,7 @@ export default function App() {
 
   const unseenPendingPeople = canSeePeoplePending ? clampUnseen(counts.pendingPeopleTotal, seenPendingPeople) : 0;
   const unseenRequests = canSeeRequests ? clampUnseen(counts.requestsTotal, seenRequests) : 0;
-  const unseenApprovals = clampUnseen(counts.approvalsTotal, seenApprovals);
+  const unseenApprovals = canSeeApprovals ? clampUnseen(counts.approvalsTotal, seenApprovals) : 0;
 
   const Sidebar = ({
     collapsed,
@@ -433,14 +433,16 @@ export default function App() {
             />
           )}
 
-          <NavItem
-            collapsed={collapsed}
-            to="/approvals"
-            label="Miratime"
-            current={loc.pathname.startsWith('/approvals')}
-            icon={<HiCheckCircle />}
-            badge={unseenApprovals}
-          />
+          {canSeeApprovals && (
+            <NavItem
+              collapsed={collapsed}
+              to="/approvals"
+              label="Miratime"
+              current={loc.pathname.startsWith('/approvals')}
+              icon={<HiCheckCircle />}
+              badge={unseenApprovals}
+            />
+          )}
 
           {canSeeVehiclesLive && (
             <NavItem
