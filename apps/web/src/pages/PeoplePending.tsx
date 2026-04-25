@@ -1,6 +1,6 @@
 // src/pages/PeoplePending.tsx
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import {
@@ -21,34 +21,40 @@ function initials(first?: string, last?: string) {
 function formatDate(v: any) {
     if (!v) return '';
     const s = String(v);
-    // nëse vjen ISO, shfaq vetëm YYYY-MM-DD
     if (s.length >= 10) return s.slice(0, 10);
     return s;
 }
 
 function statusPill(text: string) {
     const t = (text ?? '').toUpperCase();
-    if (t === 'PENDING')
+
+    if (t === 'PENDING') {
         return (
             <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-900 ring-1 ring-amber-200">
                 <span className="h-1.5 w-1.5 rounded-full bg-amber-600" />
                 PENDING
             </span>
         );
-    if (t === 'ACTIVE')
+    }
+
+    if (t === 'ACTIVE') {
         return (
             <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-900 ring-1 ring-emerald-200">
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-600" />
                 ACTIVE
             </span>
         );
-    if (t === 'REJECTED')
+    }
+
+    if (t === 'REJECTED') {
         return (
             <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-rose-100 text-rose-900 ring-1 ring-rose-200">
                 <span className="h-1.5 w-1.5 rounded-full bg-rose-600" />
                 REJECTED
             </span>
         );
+    }
+
     return (
         <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-700 ring-1 ring-gray-200">
             {t || '—'}
@@ -126,23 +132,19 @@ export default function PeoplePendingPage() {
     const [pages, setPages] = useState(1);
     const [loading, setLoading] = useState(false);
 
-    // ✅ Search + filter
     const [query, setQuery] = useState('');
     const [cityFilter, setCityFilter] = useState('');
 
-    // ✅ Modal "Shiko"
     const [open, setOpen] = useState(false);
     const [detail, setDetail] = useState<PersonDetail | null>(null);
     const [detailLoading, setDetailLoading] = useState(false);
     const [detailError, setDetailError] = useState<string | null>(null);
 
-    // ✅ Confirm modal (modern) për Refuzim
     const [rejectOpen, setRejectOpen] = useState(false);
     const [rejectId, setRejectId] = useState<string | null>(null);
     const [rejectReason, setRejectReason] = useState('');
     const [actionBusy, setActionBusy] = useState(false);
 
-    // ✅ Base URL i backend-it (p.sh. http://localhost:4000/api) → për foto duhet pa "/api"
     const uploadBase = useMemo(() => {
         const apiBase = (import.meta as any).env?.VITE_API_URL || 'http://localhost:4000/api';
         return String(apiBase).replace(/\/api\/?$/, '');
@@ -178,22 +180,45 @@ export default function PeoplePendingPage() {
         load(1);
     }, []);
 
-    // ✅ ESC për modalet
     useEffect(() => {
         if (!open && !rejectOpen) return;
 
         const onKeyDown = (e: KeyboardEvent) => {
             if (e.key === 'Escape') {
-                setOpen(false);
-                setDetail(null);
-                setRejectOpen(false);
-                setRejectId(null);
-                setRejectReason('');
+                closeDetailModal();
+                closeRejectModal();
             }
         };
+
         window.addEventListener('keydown', onKeyDown);
         return () => window.removeEventListener('keydown', onKeyDown);
     }, [open, rejectOpen]);
+
+    useEffect(() => {
+        const modalOpened = open || rejectOpen;
+        const originalOverflow = document.body.style.overflow;
+
+        if (modalOpened) {
+            document.body.style.overflow = 'hidden';
+        }
+
+        return () => {
+            document.body.style.overflow = originalOverflow;
+        };
+    }, [open, rejectOpen]);
+
+    function closeDetailModal() {
+        setOpen(false);
+        setDetail(null);
+        setDetailError(null);
+        setDetailLoading(false);
+    }
+
+    function closeRejectModal() {
+        setRejectOpen(false);
+        setRejectId(null);
+        setRejectReason('');
+    }
 
     async function handleView(id: string) {
         setOpen(true);
@@ -207,8 +232,11 @@ export default function PeoplePendingPage() {
         } catch (err: any) {
             console.error('getPerson error', err);
             const code = err?.response?.data?.code;
-            if (code === 'FORBIDDEN_UNIT') setDetailError('S’ke akses me pa këtë ushtar (njësi tjetër).');
-            else setDetailError('S’u morën të dhënat e ushtarit. Provo prapë.');
+            if (code === 'FORBIDDEN_UNIT') {
+                setDetailError('S’ke akses me pa këtë ushtar (njësi tjetër).');
+            } else {
+                setDetailError('S’u morën të dhënat e ushtarit. Provo prapë.');
+            }
         } finally {
             setDetailLoading(false);
         }
@@ -223,8 +251,7 @@ export default function PeoplePendingPage() {
             await load(1);
 
             if (detail?._id === id) {
-                setOpen(false);
-                setDetail(null);
+                closeDetailModal();
             }
         } catch (err) {
             console.error('approvePerson error', err);
@@ -250,12 +277,10 @@ export default function PeoplePendingPage() {
             await load(1);
 
             if (detail?._id === rejectId) {
-                setOpen(false);
-                setDetail(null);
+                closeDetailModal();
             }
-            setRejectOpen(false);
-            setRejectId(null);
-            setRejectReason('');
+
+            closeRejectModal();
         } catch (err) {
             console.error('rejectPerson error', err);
             alert('Nuk u refuzua. Kontrollo API ose provo përsëri.');
@@ -275,126 +300,151 @@ export default function PeoplePendingPage() {
 
             const okQ = !q || full.includes(q) || sn.includes(q);
             const okC = !c || city.includes(c);
+
             return okQ && okC;
         });
     }, [items, query, cityFilter]);
 
+    const uniqueCities = useMemo(() => {
+        const set = new Set<string>();
+        items.forEach((p) => {
+            const c = String((p as any)?.city ?? '').trim();
+            if (c) set.add(c);
+        });
+        return Array.from(set).sort((a, b) => a.localeCompare(b));
+    }, [items]);
+
     const photoSrc = resolvePhotoSrc(detail?.photoUrl);
 
-    // ✅ Modal UI (Portal) — details
     const detailModal =
         open &&
         createPortal(
             <div
-                className="fixed inset-0 z-[9999] bg-slate-900/60 backdrop-blur-[2px] flex items-center justify-center p-4"
-                onClick={() => {
-                    setOpen(false);
-                    setDetail(null);
-                }}
+                className="fixed inset-0 z-[9999] bg-slate-900/60 backdrop-blur-[2px] overflow-y-auto"
+                onClick={closeDetailModal}
             >
-                <div
-                    className="w-full max-w-3xl rounded-2xl shadow-2xl bg-white overflow-hidden ring-1 ring-black/5"
-                    onClick={(e) => e.stopPropagation()}
-                >
-                    {/* Header */}
-                    <div className="px-5 py-4 border-b bg-gradient-to-r from-slate-50 to-white flex items-center justify-between">
-                        <div>
-                            <div className="text-base font-semibold text-slate-900">Verifikimi i ushtarit</div>
-                            <div className="text-xs text-slate-500">Shiko detajet dhe vendos Mirato / Refuzo</div>
+                <div className="min-h-full flex items-start justify-center p-3 sm:p-4 md:p-6">
+                    <div
+                        className="w-full max-w-4xl rounded-2xl shadow-2xl bg-white ring-1 ring-black/5 max-h-[92vh] flex flex-col overflow-hidden my-auto"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        {/* Header */}
+                        <div className="shrink-0 px-4 sm:px-5 py-4 border-b bg-gradient-to-r from-slate-50 to-white flex items-center justify-between gap-3">
+                            <div>
+                                <div className="text-base font-semibold text-slate-900">Verifikimi i ushtarit</div>
+                                <div className="text-xs text-slate-500">Shiko detajet dhe vendos Mirato / Refuzo</div>
+                            </div>
+
+                            <button
+                                className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border bg-white hover:bg-slate-50 text-sm"
+                                onClick={closeDetailModal}
+                            >
+                                <IconX className="h-4 w-4" />
+                            </button>
                         </div>
 
-                        <button
-                            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border bg-white hover:bg-slate-50 text-sm"
-                            onClick={() => {
-                                setOpen(false);
-                                setDetail(null);
-                            }}
-                        >
-                            <IconX className="h-4 w-4" />
-                            Mbyll
-                        </button>
-                    </div>
+                        {/* Scrollable body */}
+                        <div className="flex-1 overflow-y-auto p-4 sm:p-5">
+                            {detailLoading && (
+                                <div className="rounded-xl border bg-slate-50 p-4 text-sm text-slate-600">
+                                    Duke u ngarkuar…
+                                </div>
+                            )}
 
-                    {/* Body */}
-                    <div className="p-5">
-                        {detailLoading && (
-                            <div className="rounded-xl border bg-slate-50 p-4 text-sm text-slate-600">Duke u ngarkuar…</div>
-                        )}
+                            {detailError && (
+                                <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
+                                    {detailError}
+                                </div>
+                            )}
 
-                        {detailError && (
-                            <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{detailError}</div>
-                        )}
+                            {!detailLoading && !detailError && detail && (
+                                <div className="space-y-5">
+                                    {/* Top card */}
+                                    <div className="rounded-2xl border bg-white overflow-hidden">
+                                        <div className="p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                                            <div className="flex items-center gap-3 min-w-0">
+                                                <div className="h-12 w-12 rounded-xl bg-slate-900 text-white flex items-center justify-center font-semibold shrink-0">
+                                                    {initials(detail.firstName, detail.lastName)}
+                                                </div>
 
+                                                <div className="min-w-0">
+                                                    <div className="text-lg font-semibold text-slate-900 break-words">
+                                                        {detail.firstName} {detail.lastName}
+                                                    </div>
+                                                    <div className="text-xs text-slate-500 break-all">
+                                                        Nr. Shërbimit:{' '}
+                                                        <span className="font-medium text-slate-700">
+                                                            {String(detail.serviceNo ?? '')}
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <div className="flex items-center gap-2">
+                                                {statusPill(String(detail.status ?? ''))}
+                                            </div>
+                                        </div>
+
+                                        <div className="border-t bg-slate-50 p-4">
+                                            <div className="text-xs text-slate-500 mb-2">Foto</div>
+
+                                            <div className="rounded-xl border bg-white p-2">
+                                                {photoSrc ? (
+                                                    <div className="w-full flex items-center justify-center bg-slate-50 rounded-lg overflow-hidden">
+                                                        <img
+                                                            src={photoSrc}
+                                                            alt={`${detail.firstName} ${detail.lastName}`}
+                                                            className="w-full h-auto max-h-[260px] sm:max-h-[360px] object-contain rounded-lg"
+                                                            loading="lazy"
+                                                            onError={(e) => {
+                                                                (e.currentTarget as HTMLImageElement).style.display = 'none';
+                                                            }}
+                                                        />
+                                                    </div>
+                                                ) : (
+                                                    <div className="text-sm text-slate-500">Pa foto</div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Grid info */}
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                        <Info label="Nr. Personal" value={detail.personalNumber ?? ''} />
+                                        <Info label="Gjinia" value={detail.gender ?? ''} />
+                                        <Info label="Data e lindjes" value={formatDate(detail.birthDate ?? '')} />
+                                        <Info label="Fillimi shërbimit" value={formatDate(detail.serviceStartDate ?? '')} />
+                                        <Info label="Pozita" value={detail.position ?? ''} />
+                                        <Info label="Qyteti" value={detail.city ?? ''} />
+                                        <Info label="Adresa" value={detail.address ?? ''} />
+                                        <Info label="Telefoni" value={detail.phone ?? ''} />
+                                        <Info label="Grada (gradeId)" value={detail.gradeId ?? ''} />
+                                        <Info
+                                            label="Njësia"
+                                            value={
+                                                ((detail as any).unitCode && (detail as any).unitName)
+                                                    ? `${(detail as any).unitCode} — ${(detail as any).unitName}`
+                                                    : (detail as any).unitName ||
+                                                    (detail as any).unit?.name ||
+                                                    (detail as any).unitId ||
+                                                    ''
+                                            }
+                                        />
+                                    </div>
+
+                                    <div>
+                                        <div className="text-xs text-slate-500 mb-2">Shënime</div>
+                                        <div className="rounded-xl border bg-slate-50 p-3 text-sm text-slate-700 min-h-[44px] whitespace-pre-wrap break-words">
+                                            {detail.notes ?? ''}
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Footer actions */}
                         {!detailLoading && !detailError && detail && (
-                            <div className="space-y-5">
-                                {/* Top card */}
-                                <div className="rounded-2xl border bg-white overflow-hidden">
-                                    <div className="p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-                                        <div className="flex items-center gap-3">
-                                            <div className="h-12 w-12 rounded-xl bg-slate-900 text-white flex items-center justify-center font-semibold">
-                                                {initials(detail.firstName, detail.lastName)}
-                                            </div>
-                                            <div>
-                                                <div className="text-lg font-semibold text-slate-900">
-                                                    {detail.firstName} {detail.lastName}
-                                                </div>
-                                                <div className="text-xs text-slate-500">
-                                                    Nr. Shërbimit: <span className="font-medium text-slate-700">{String(detail.serviceNo ?? '')}</span>
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        <div className="flex items-center gap-2">
-                                            {statusPill(String(detail.status ?? ''))}
-                                        </div>
-                                    </div>
-
-                                    <div className="border-t bg-slate-50 p-4">
-                                        <div className="text-xs text-slate-500 mb-2">Foto</div>
-                                        <div className="rounded-xl border bg-white p-2">
-                                            {photoSrc ? (
-                                                <img
-                                                    src={photoSrc}
-                                                    alt={`${detail.firstName} ${detail.lastName}`}
-                                                    className="w-full max-h-[360px] object-contain rounded-lg"
-                                                    loading="lazy"
-                                                    onError={(e) => {
-                                                        (e.currentTarget as HTMLImageElement).style.display = 'none';
-                                                    }}
-                                                />
-                                            ) : (
-                                                <div className="text-sm text-slate-500">Pa foto</div>
-                                            )}
-
-                                            {detail.photoUrl ? (
-                                                <div className="mt-2 text-[11px] text-slate-400 break-all">Path: {detail.photoUrl}</div>
-                                            ) : null}
-                                        </div>
-                                    </div>
-                                </div>
-
-                                {/* Grid info */}
-                                <div className="grid md:grid-cols-2 gap-3">
-                                    <Info label="Nr. Personal" value={detail.personalNumber ?? ''} />
-                                    <Info label="Gjinia" value={detail.gender ?? ''} />
-                                    <Info label="Data e lindjes" value={formatDate(detail.birthDate ?? '')} />
-                                    <Info label="Fillimi shërbimit" value={formatDate(detail.serviceStartDate ?? '')} />
-                                    <Info label="Pozita" value={detail.position ?? ''} />
-                                    <Info label="Qyteti" value={detail.city ?? ''} />
-                                    <Info label="Adresa" value={detail.address ?? ''} />
-                                    <Info label="Telefoni" value={detail.phone ?? ''} />
-                                    <Info label="Grada (gradeId)" value={detail.gradeId ?? ''} />
-                                    <Info label="Njësia (unitId)" value={(detail as any).unitId ?? ''} />
-                                </div>
-
-                                <div>
-                                    <div className="text-xs text-slate-500 mb-2">Shënime</div>
-                                    <div className="rounded-xl border bg-slate-50 p-3 text-sm text-slate-700 min-h-[44px] whitespace-pre-wrap">
-                                        {detail.notes ?? ''}
-                                    </div>
-                                </div>
-
-                                {/* Actions */}
+                            <div className="shrink-0 border-t bg-white px-4 sm:px-5 py-4">
                                 <div className="flex flex-col sm:flex-row sm:justify-end gap-2">
                                     <button
                                         disabled={actionBusy}
@@ -422,70 +472,60 @@ export default function PeoplePendingPage() {
             document.body
         );
 
-    // ✅ Reject modal (Portal)
     const rejectModal =
         rejectOpen &&
         createPortal(
             <div
-                className="fixed inset-0 z-[10000] bg-slate-900/60 backdrop-blur-[2px] flex items-center justify-center p-4"
-                onClick={() => {
-                    setRejectOpen(false);
-                    setRejectId(null);
-                    setRejectReason('');
-                }}
+                className="fixed inset-0 z-[10000] bg-slate-900/60 backdrop-blur-[2px] overflow-y-auto"
+                onClick={closeRejectModal}
             >
-                <div
-                    className="w-full max-w-lg rounded-2xl shadow-2xl bg-white overflow-hidden ring-1 ring-black/5"
-                    onClick={(e) => e.stopPropagation()}
-                >
-                    <div className="px-5 py-4 border-b bg-gradient-to-r from-rose-50 to-white flex items-center justify-between">
-                        <div>
-                            <div className="text-base font-semibold text-slate-900">Refuzo ushtarin</div>
-                            <div className="text-xs text-slate-500">Shkruaj arsyen e refuzimit (e detyrueshme).</div>
+                <div className="min-h-full flex items-center justify-center p-4">
+                    <div
+                        className="w-full max-w-lg rounded-2xl shadow-2xl bg-white overflow-hidden ring-1 ring-black/5 max-h-[90vh] flex flex-col"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="shrink-0 px-5 py-4 border-b bg-gradient-to-r from-rose-50 to-white flex items-center justify-between">
+                            <div>
+                                <div className="text-base font-semibold text-slate-900">Refuzo ushtarin</div>
+                                <div className="text-xs text-slate-500">
+                                    Shkruaj arsyen e refuzimit (e detyrueshme).
+                                </div>
+                            </div>
+
+                            <button
+                                className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border bg-white hover:bg-slate-50 text-sm"
+                                onClick={closeRejectModal}
+                            >
+                                <IconX className="h-4 w-4" />
+                            </button>
                         </div>
 
-                        <button
-                            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border bg-white hover:bg-slate-50 text-sm"
-                            onClick={() => {
-                                setRejectOpen(false);
-                                setRejectId(null);
-                                setRejectReason('');
-                            }}
-                        >
-                            <IconX className="h-4 w-4" />
-                            Mbyll
-                        </button>
-                    </div>
+                        <div className="flex-1 overflow-y-auto p-5 space-y-3">
+                            <textarea
+                                value={rejectReason}
+                                onChange={(e) => setRejectReason(e.target.value)}
+                                rows={5}
+                                placeholder="Arsyen e refuzimit..."
+                                className="w-full rounded-xl border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rose-200 resize-y"
+                            />
 
-                    <div className="p-5 space-y-3">
-                        <textarea
-                            value={rejectReason}
-                            onChange={(e) => setRejectReason(e.target.value)}
-                            rows={4}
-                            placeholder="p.sh. Foto nuk është e qartë / Nr. personal nuk përputhet / Dokument i munguar…"
-                            className="w-full rounded-xl border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rose-200"
-                        />
+                            <div className="flex justify-end gap-2">
+                                <button
+                                    disabled={actionBusy}
+                                    onClick={closeRejectModal}
+                                    className="px-4 py-2.5 rounded-xl border bg-white hover:bg-slate-50 text-sm disabled:opacity-50"
+                                >
+                                    Anulo
+                                </button>
 
-                        <div className="flex justify-end gap-2">
-                            <button
-                                disabled={actionBusy}
-                                onClick={() => {
-                                    setRejectOpen(false);
-                                    setRejectId(null);
-                                    setRejectReason('');
-                                }}
-                                className="px-4 py-2.5 rounded-xl border bg-white hover:bg-slate-50 text-sm disabled:opacity-50"
-                            >
-                                Anulo
-                            </button>
-
-                            <button
-                                disabled={actionBusy || !rejectReason.trim()}
-                                onClick={confirmReject}
-                                className="px-4 py-2.5 rounded-xl bg-rose-600 text-white hover:bg-rose-700 text-sm disabled:opacity-50"
-                            >
-                                {actionBusy ? 'Duke refuzuar…' : 'Refuzo'}
-                            </button>
+                                <button
+                                    disabled={actionBusy || !rejectReason.trim()}
+                                    onClick={confirmReject}
+                                    className="px-4 py-2.5 rounded-xl bg-rose-600 text-white hover:bg-rose-700 text-sm disabled:opacity-50"
+                                >
+                                    {actionBusy ? 'Duke refuzuar…' : 'Refuzo'}
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -493,24 +533,13 @@ export default function PeoplePendingPage() {
             document.body
         );
 
-    const uniqueCities = useMemo(() => {
-        const set = new Set<string>();
-        items.forEach((p) => {
-            const c = String((p as any)?.city ?? '').trim();
-            if (c) set.add(c);
-        });
-        return Array.from(set).sort((a, b) => a.localeCompare(b));
-    }, [items]);
-
     return (
         <div className="space-y-5">
             {/* Header */}
             <div className="rounded-2xl border bg-gradient-to-r from-slate-50 to-white p-4 md:p-5 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                 <div>
                     <h1 className="text-2xl font-semibold text-slate-900">Ushtarët në pritje</h1>
-                    <div className="text-sm text-slate-600 mt-1">
-
-                    </div>
+                    <div className="text-sm text-slate-600 mt-1"></div>
                 </div>
 
                 <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
@@ -571,13 +600,13 @@ export default function PeoplePendingPage() {
                 ) : filtered.length === 0 ? (
                     <div className="p-5">
                         <div className="rounded-xl border bg-slate-50 p-4 text-sm text-slate-600">
-                            Aktualisht nuk ka ushtarë në statusin PENDING (ose filtrat nuk kanë rezultat).
+                            Aktualisht nuk ka ushtarë në pritje...
                         </div>
                     </div>
                 ) : (
                     <>
                         {/* Desktop table */}
-                        <div className="hidden md:block">
+                        <div className="hidden md:block overflow-x-auto">
                             <table className="w-full text-sm">
                                 <thead className="bg-slate-50">
                                     <tr className="text-left text-slate-600">
@@ -597,6 +626,7 @@ export default function PeoplePendingPage() {
                                                     <div className="h-10 w-10 rounded-xl bg-slate-900 text-white flex items-center justify-center font-semibold">
                                                         {initials(p.firstName, p.lastName)}
                                                     </div>
+
                                                     <div>
                                                         <div className="font-medium text-slate-900">
                                                             {p.firstName} {p.lastName}
@@ -606,12 +636,14 @@ export default function PeoplePendingPage() {
                                                 </div>
                                             </td>
 
-                                            <td className="py-3 px-4 text-slate-800">{String((p as any)?.serviceNo ?? '')}</td>
+                                            <td className="py-3 px-4 text-slate-800">
+                                                {String((p as any)?.serviceNo ?? '')}
+                                            </td>
                                             <td className="py-3 px-4 text-slate-800">{(p as any)?.city ?? ''}</td>
                                             <td className="py-3 px-4">{statusPill('PENDING')}</td>
 
                                             <td className="py-3 px-4">
-                                                <div className="flex justify-end gap-2">
+                                                <div className="flex justify-end gap-2 flex-wrap">
                                                     <button
                                                         onClick={() => handleView(p._id)}
                                                         className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border bg-white hover:bg-slate-50 text-xs"
@@ -654,11 +686,14 @@ export default function PeoplePendingPage() {
                                             <div className="h-10 w-10 rounded-xl bg-slate-900 text-white flex items-center justify-center font-semibold">
                                                 {initials(p.firstName, p.lastName)}
                                             </div>
+
                                             <div>
                                                 <div className="font-semibold text-slate-900">
                                                     {p.firstName} {p.lastName}
                                                 </div>
-                                                <div className="text-xs text-slate-500">Nr: {String((p as any)?.serviceNo ?? '')}</div>
+                                                <div className="text-xs text-slate-500">
+                                                    Nr: {String((p as any)?.serviceNo ?? '')}
+                                                </div>
                                             </div>
                                         </div>
 
@@ -667,7 +702,8 @@ export default function PeoplePendingPage() {
 
                                     <div className="mt-3 text-sm text-slate-700">
                                         <div>
-                                            <span className="text-slate-500 text-xs">Qyteti:</span> {(p as any)?.city ?? ''}
+                                            <span className="text-slate-500 text-xs">Qyteti:</span>{' '}
+                                            {(p as any)?.city ?? ''}
                                         </div>
                                     </div>
 
@@ -730,7 +766,6 @@ export default function PeoplePendingPage() {
                 )}
             </div>
 
-            {/* Portals */}
             {detailModal}
             {rejectModal}
         </div>
@@ -739,6 +774,7 @@ export default function PeoplePendingPage() {
 
 function Info({ label, value }: { label: string; value: any }) {
     const v = value ?? '';
+
     return (
         <div className="rounded-xl border bg-white p-3">
             <div className="text-xs text-slate-500">{label}</div>

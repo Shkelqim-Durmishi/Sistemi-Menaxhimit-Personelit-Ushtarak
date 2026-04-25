@@ -10,7 +10,6 @@ const API_BASE = (import.meta as any).env?.VITE_API_URL || 'http://localhost:400
 
 // Origin pa "/api" (për /uploads/...)
 function getApiOrigin() {
-    // heq /api në fund nëse ekziston
     return String(API_BASE).replace(/\/api\/?$/, '');
 }
 
@@ -18,9 +17,8 @@ function getApiOrigin() {
 export function toPublicUrl(maybePath?: string | null) {
     if (!maybePath) return null;
 
-    if (/^https?:\/\//i.test(maybePath)) return maybePath; // tashmë absolute
+    if (/^https?:\/\//i.test(maybePath)) return maybePath;
 
-    // ✅ edhe pa "/" në fillim
     if (maybePath.startsWith('/uploads/')) return `${getApiOrigin()}${maybePath}`;
     if (maybePath.startsWith('uploads/')) return `${getApiOrigin()}/${maybePath}`;
 
@@ -36,15 +34,12 @@ export const api = axios.create({
     withCredentials: true,
 });
 
-/* ====== Optional: auto logout on 401 (token expired) ======
-   Nëse s’e do, fshije këtë interceptor.
-*/
+/* ====== Optional: auto logout on 401 ====== */
 api.interceptors.response.use(
     (res) => res,
     (err) => {
         const status = err?.response?.status;
         if (status === 401) {
-            // token invalid/expired -> pastro storage
             try {
                 localStorage.removeItem('token');
                 localStorage.removeItem('currentUser');
@@ -73,10 +68,7 @@ export interface CurrentUser {
     username: string;
     role: UserRole;
     unitId: string | null;
-
-    // ✅ SHTO KETE
     unit?: UnitBrief | null;
-
     mustChangePassword?: boolean;
 }
 
@@ -89,13 +81,11 @@ export interface AdminUser {
     lastLogin?: string | null;
     createdAt?: string;
 
-    // 🔐 Siguria / Bllokimi
     isBlocked?: boolean;
     blockReason?: string | null;
     failedLoginCount?: number;
     lastFailedLoginAt?: string | null;
 
-    // 📄 Kontrata
     contractValidFrom?: string | null;
     contractValidTo?: string | null;
     neverExpires?: boolean;
@@ -121,11 +111,9 @@ export function setAuthToken(token: string | null) {
     }
 }
 
-// inicializo token-in nga localStorage në refresh
 const bootToken = localStorage.getItem('token');
 if (bootToken) api.defaults.headers.common['Authorization'] = `Bearer ${bootToken}`;
 
-// ruajtje user-info
 export function setCurrentUser(user: CurrentUser | null) {
     if (user) localStorage.setItem('currentUser', JSON.stringify(user));
     else localStorage.removeItem('currentUser');
@@ -157,13 +145,10 @@ export async function login(username: string, password: string) {
     return data.user as CurrentUser;
 }
 
-// thërret /auth/logout për audit trail
 export async function logout() {
     try {
         await api.post('/auth/logout');
-    } catch {
-        // nëse token-i ka skadu, s'ka problem
-    }
+    } catch { }
     setAuthToken(null);
     setCurrentUser(null);
 }
@@ -195,11 +180,10 @@ export async function getSummary() {
         reportsToday: number;
         rowsToday: number;
         date: string;
-        unitId?: string | null; // ✅ backend tash e kthen (opsionale)
+        unitId?: string | null;
     };
 }
 
-// ✅ NEW: Charts payload
 export type ReportStatus = 'DRAFT' | 'PENDING' | 'APPROVED' | 'REJECTED';
 export type PersonStatus = 'PENDING' | 'ACTIVE' | 'INACTIVE' | 'REJECTED';
 
@@ -276,7 +260,6 @@ export interface PersonListItem {
     serviceStartDate?: string | null;
     notes?: string | null;
 
-    // ✅ tani do të kthehet absolute kur është /uploads/...
     photoUrl?: string | null;
 }
 
@@ -287,23 +270,21 @@ export interface CreatePersonPayload {
     firstName: string;
     lastName: string;
 
-    gradeId: string; // te backend: STRING
-    unitId: string; // ObjectId
+    gradeId: string;
+    unitId: string;
 
     personalNumber?: string | null;
-    birthDate?: string | null; // YYYY-MM-DD
+    birthDate?: string | null;
     gender?: 'M' | 'F' | 'O' | null;
     city?: string | null;
     address?: string | null;
     phone?: string | null;
     position?: string | null;
-    serviceStartDate?: string | null; // YYYY-MM-DD
+    serviceStartDate?: string | null;
     notes?: string | null;
 
-    // dataURL ose null
     photoUrl?: string | null;
-
-    status?: PersonStatus; // zakonisht mos e dërgo
+    status?: PersonStatus;
 }
 
 /* ===== Categories ===== */
@@ -438,7 +419,7 @@ export async function listReports(params?: { date?: string; unit?: string; perso
     return data as any[];
 }
 
-/* ===== People helpers: pushimet e ardhshme (APPROVED) ===== */
+/* ===== People helpers ===== */
 
 export async function getUpcomingLeave(personId: string) {
     const { data } = await api.get(`/people/${personId}/upcoming-leave`);
@@ -516,8 +497,6 @@ export async function adminDeleteUser(id: string) {
     await api.delete(`/users/${id}`);
 }
 
-/* ===== Bllokim / Çbllokim user ===== */
-
 export async function adminBlockUser(id: string, reason?: string) {
     const { data } = await api.put(`/users/${id}/block`, { reason });
     return data as AdminUser;
@@ -528,7 +507,7 @@ export async function adminUnblockUser(id: string) {
     return data as AdminUser;
 }
 
-/* ===== Login Audit (vetëm ADMIN) ===== */
+/* ===== Login Audit ===== */
 
 export interface LoginAuditItem {
     id: string;
@@ -554,8 +533,8 @@ export async function listLoginAudit(params?: {
     limit?: number;
     username?: string;
     type?: 'LOGIN' | 'LOGOUT' | 'INVALID_PASSWORD' | 'AUTO_BLOCK';
-    from?: string; // YYYY-MM-DD
-    to?: string; // YYYY-MM-DD
+    from?: string;
+    to?: string;
 }) {
     const { page = 1, limit = 50, username, type, from, to } = params ?? {};
     const { data } = await api.get('/login-audit', { params: { page, limit, username, type, from, to } });
@@ -575,7 +554,33 @@ export type RequestAction =
     | 'CHANGE_UNIT'
     | 'DEACTIVATE_PERSON'
     | 'UPDATE_PERSON'
-    | 'CREATE_USER';
+    | 'CREATE_USER'
+    | 'CREATE_UNIT';
+
+export interface CreateUserRequestPayload {
+    reason?: string;
+    user: {
+        username: string;
+        email: string;
+        role: UserRole | string;
+        unitId?: string | null;
+        contractValidFrom?: string | null;
+        contractValidTo?: string | null;
+        neverExpires?: boolean;
+        mustChangePassword?: boolean;
+    };
+}
+
+export interface CreateUnitRequestPayload {
+    reason?: string;
+    unit: {
+        code: string;
+        name: string;
+        parentId?: string | null;
+        parentCode?: string;
+        parentName?: string;
+    };
+}
 
 export interface RequestItem {
     id?: string;
@@ -583,6 +588,7 @@ export interface RequestItem {
 
     personId: any;
     targetUnitId?: any;
+    targetRole?: string | null;
 
     type: RequestAction;
     payload?: any;
@@ -610,14 +616,36 @@ export async function createRequest(input: { personId: string; type: RequestActi
     return data as RequestItem;
 }
 
+export async function createUnitRequest(payload: CreateUnitRequestPayload) {
+    const { data } = await api.post('/requests', {
+        personId: '',
+        type: 'CREATE_UNIT',
+        payload,
+    });
+    return data as RequestItem;
+}
+
+export async function createUserRequest(payload: CreateUserRequestPayload) {
+    const { data } = await api.post('/requests', {
+        personId: '',
+        type: 'CREATE_USER',
+        payload,
+    });
+    return data as RequestItem;
+}
+
 export async function listMyRequests(params?: { page?: number; limit?: number; status?: RequestStatus }) {
     const { page = 1, limit = 50, status } = params ?? {};
     const { data } = await api.get('/requests/my', { params: { page, limit, status } });
     return data as RequestPage;
 }
 
-// Incoming për COMMANDER (unit + children), ADMIN, AUDITOR
-export async function listIncomingRequests(params?: { page?: number; limit?: number; status?: RequestStatus; type?: RequestAction }) {
+export async function listIncomingRequests(params?: {
+    page?: number;
+    limit?: number;
+    status?: RequestStatus;
+    type?: RequestAction;
+}) {
     const { page = 1, limit = 50, status, type } = params ?? {};
     const { data } = await api.get('/requests/incoming', { params: { page, limit, status, type } });
     return data as RequestPage;
@@ -644,7 +672,7 @@ export async function cancelRequest(id: string, note = '') {
 }
 
 /* =========================
-   ✅ REQUESTS PDF (NEW)
+   REQUESTS PDF
    ========================= */
 
 export function requestPdfUrl(id: string, opts?: { download?: boolean }) {
@@ -718,7 +746,7 @@ export async function adminMockVehicleLocation(
 }
 
 /* =========================
-   ✅ System Notice
+   System Notice
    ========================= */
 
 export type SystemNotice = {
@@ -730,7 +758,6 @@ export type SystemNotice = {
 };
 
 export async function getSystemNotice() {
-    // anti-cache (sidomos në prod / proxies)
     const res = await api.get('/system-notice', {
         params: { t: Date.now() },
         headers: { 'Cache-Control': 'no-store' },
@@ -749,33 +776,19 @@ export async function updateSystemNotice(payload: {
 }
 
 /* =========================
-   ✅ COUNTS (për sidebar badges)
+   COUNTS
    ========================= */
 
-/**
- * Helper: nxjerr total-in prej response që mund të jetë:
- * - { total, items: [] }
- * - { items: [], ... }
- * - [] (array)
- */
 function extractTotal(data: any): number {
     if (data == null) return 0;
 
-    // array
     if (Array.isArray(data)) return data.length;
-
-    // pagination shape
     if (typeof data?.total === 'number') return Number(data.total || 0);
-
-    // items shape pa total
     if (Array.isArray(data?.items)) return data.items.length;
 
     return 0;
 }
 
-/**
- * Sa ushtarë janë në pritje (PENDING)
- */
 export async function getPeoplePendingCount(): Promise<number> {
     const { data } = await api.get('/people', {
         params: { status: 'PENDING', page: 1, limit: 1 },
@@ -783,9 +796,6 @@ export async function getPeoplePendingCount(): Promise<number> {
     return extractTotal(data);
 }
 
-/**
- * Sa kërkesa janë PENDING (incoming)
- */
 export async function getRequestsCount(): Promise<number> {
     const { data } = await api.get('/requests/incoming', {
         params: { status: 'PENDING', page: 1, limit: 1 },
@@ -793,12 +803,7 @@ export async function getRequestsCount(): Promise<number> {
     return extractTotal(data);
 }
 
-/**
- * Sa raporte janë PENDING për miratim
- */
 export async function getApprovalsCount(): Promise<number> {
-    // në disa backende /reports kthen array, në disa pagination
-    // i japim page/limit që të jetë konsistente
     const { data } = await api.get('/reports', {
         params: { status: 'PENDING', page: 1, limit: 1 },
     });
@@ -816,8 +821,6 @@ export async function deleteMySignature() {
     return data as { ok: true };
 }
 
-
-// ✅ ME profile (with signature)
 export type MeProfile = {
     id: string;
     username: string;
@@ -833,5 +836,3 @@ export async function getMe() {
     const { data } = await api.get('/me', { params: { t: Date.now() } });
     return data as MeProfile;
 }
-
-

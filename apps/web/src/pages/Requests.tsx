@@ -1,6 +1,7 @@
 // apps/web/src/pages/Requests.tsx
 
 import { useMemo, useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
 import {
@@ -66,7 +67,6 @@ function getApiOrigin() {
     return String(base).replace(/\/api\/?$/, '');
 }
 
-// ✅ preview/download modes (opens server PDF with ?auth= token)
 function openRequestPdf(requestId: string, mode: 'preview' | 'download' = 'preview') {
     const token = localStorage.getItem('token');
     const origin = getApiOrigin();
@@ -78,6 +78,26 @@ function openRequestPdf(requestId: string, mode: 'preview' | 'download' = 'previ
     const qs = params.toString();
     const url = `${origin}/api/requests/${requestId}/pdf${qs ? `?${qs}` : ''}`;
     window.open(url, '_blank', 'noopener,noreferrer');
+}
+
+function statusTone(s: string) {
+    const up = String(s || '').toUpperCase();
+    if (up === 'APPROVED') return 'green';
+    if (up === 'REJECTED') return 'red';
+    if (up === 'CANCELLED') return 'amber';
+    if (up === 'PENDING') return 'blue';
+    return 'neutral';
+}
+
+function isValidEmail(email: string) {
+    const e = String(email || '').trim();
+    if (!e) return false;
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
+}
+
+function dateToISO(d: string) {
+    const s = String(d || '').trim();
+    return s || null;
 }
 
 /* ===============================
@@ -111,7 +131,6 @@ function Badge({
     );
 }
 
-/** Icons */
 function IconEye({ size = 18 }: { size?: number }) {
     return (
         <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -155,8 +174,6 @@ function IconClose({ size = 18 }: { size?: number }) {
    Actions / Labels
 ================================ */
 
-// ✅ NOTE: RequestAction from api.ts now includes 'CREATE_USER'. If your api.ts still doesn't,
-// update it first (as we did earlier).
 const BASE_ACTIONS: Array<{ value: RequestAction; label: string }> = [
     { value: 'DELETE_PERSON', label: 'Fshi ushtar nga sistemi' },
     { value: 'TRANSFER_PERSON', label: 'Transfero ushtar (në njësi tjetër)' },
@@ -164,35 +181,14 @@ const BASE_ACTIONS: Array<{ value: RequestAction; label: string }> = [
     { value: 'CHANGE_UNIT', label: 'Ndrysho njësinë (brenda strukturës)' },
     { value: 'DEACTIVATE_PERSON', label: 'Çaktivizo ushtar' },
     { value: 'UPDATE_PERSON', label: 'Ndrysho të dhënat (kërkesë për përditësim)' },
-    // ✅ e re: vetëm Commander do ta shohë këtë opsion
     { value: 'CREATE_USER' as RequestAction, label: 'Krijo përdorues (OFFICER/Rreshter/etj.)' },
+    { value: 'CREATE_UNIT' as RequestAction, label: 'Krijo njësi të re' },
 ];
 
 const ACTION_LABEL: Record<string, string> = BASE_ACTIONS.reduce((acc, a) => {
     acc[a.value] = a.label;
     return acc;
 }, {} as Record<string, string>);
-
-function statusTone(s: string) {
-    const up = String(s || '').toUpperCase();
-    if (up === 'APPROVED') return 'green';
-    if (up === 'REJECTED') return 'red';
-    if (up === 'CANCELLED') return 'amber';
-    if (up === 'PENDING') return 'blue';
-    return 'neutral';
-}
-
-function isValidEmail(email: string) {
-    const e = String(email || '').trim();
-    if (!e) return false;
-    // simple + safe enough for UI
-    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
-}
-
-function dateToISO(d: string) {
-    const s = String(d || '').trim();
-    return s || null;
-}
 
 /* ===============================
    Page
@@ -206,11 +202,9 @@ export default function Requests() {
     const canSeeIncoming = role === 'COMMANDER' || role === 'ADMIN' || role === 'AUDITOR';
     const [tab, setTab] = useState<'MY' | 'INCOMING'>(canSeeIncoming ? 'INCOMING' : 'MY');
 
-    // ✅ Active/Archive
     const [view, setView] = useState<'ACTIVE' | 'ARCHIVE'>('ACTIVE');
     const statusParam: RequestStatus = view === 'ARCHIVE' ? 'ARCHIVE' : 'PENDING';
 
-    // Drawer state
     const [drawerOpen, setDrawerOpen] = useState(false);
     const [selectedReq, setSelectedReq] = useState<RequestItem | null>(null);
     const [approveNote, setApproveNote] = useState('');
@@ -240,7 +234,16 @@ export default function Requests() {
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [drawerOpen]);
+
+    useEffect(() => {
+        const originalOverflow = document.body.style.overflow;
+        if (drawerOpen) {
+            document.body.style.overflow = 'hidden';
+        }
+        return () => {
+            document.body.style.overflow = originalOverflow;
+        };
     }, [drawerOpen]);
 
     /* ===============================
@@ -276,10 +279,13 @@ export default function Requests() {
     const [showDropdown, setShowDropdown] = useState(false);
     const [selectedLabel, setSelectedLabel] = useState('');
 
-    // ✅ actions: komandanti i sheh edhe CREATE_USER, të tjerët jo
     const availableActions = useMemo(() => {
         if (role === 'COMMANDER') return BASE_ACTIONS;
-        return BASE_ACTIONS.filter((a) => a.value !== ('CREATE_USER' as RequestAction));
+        return BASE_ACTIONS.filter(
+            (a) =>
+                a.value !== ('CREATE_USER' as RequestAction) &&
+                a.value !== ('CREATE_UNIT' as RequestAction)
+        );
     }, [role]);
 
     const [action, setAction] = useState<RequestAction>('TRANSFER_PERSON');
@@ -310,8 +316,7 @@ export default function Requests() {
     const peopleQ = useQuery({
         queryKey: ['people-search', debouncedQ],
         queryFn: () => searchPeople(debouncedQ, 1, 8),
-        // ✅ mos kërko njerëz kur është CREATE_USER
-        enabled: showDropdown && debouncedQ.length >= 1 && action !== ('CREATE_USER' as RequestAction),
+        enabled: showDropdown && debouncedQ.length >= 1 && action !== ('CREATE_USER' as RequestAction) && action !== ('CREATE_UNIT' as RequestAction),
     });
 
     const activePeople = useMemo(() => {
@@ -320,28 +325,35 @@ export default function Requests() {
     }, [peopleQ.data]);
 
     /* ===============================
-       Create: user-request states (Commander only)
+       Create: user-request states
     ============================== */
 
     const [newUsername, setNewUsername] = useState('');
     const [newEmail, setNewEmail] = useState('');
     const [newRole, setNewRole] = useState<UserRole>('OFFICER' as UserRole);
 
-    // kontrata
     const [contractFrom, setContractFrom] = useState('');
     const [contractTo, setContractTo] = useState('');
     const [neverExpires, setNeverExpires] = useState(true);
 
-    // default: kërko me ndërru password
     const [mustChangePassword, setMustChangePassword] = useState(true);
 
-    // ✅ kur roli s’është commander, sigurohu që aksioni s’mund të mbetet CREATE_USER
+    /* ===============================
+       Create: unit-request states
+    ============================== */
+
+    const [unitCode, setUnitCode] = useState('');
+    const [unitName, setUnitName] = useState('');
+    const [parentUnitId, setParentUnitId] = useState('');
+
     useEffect(() => {
-        if (role !== 'COMMANDER' && action === ('CREATE_USER' as RequestAction)) {
+        if (
+            role !== 'COMMANDER' &&
+            (action === ('CREATE_USER' as RequestAction) || action === ('CREATE_UNIT' as RequestAction))
+        ) {
             setAction('TRANSFER_PERSON');
         }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [role]);
+    }, [role, action]);
 
     /* ===============================
        Mutations
@@ -349,14 +361,31 @@ export default function Requests() {
 
     const createM = useMutation({
         mutationFn: async () => {
-            // ✅ CREATE_USER (vetëm commander)
+            if (action === ('CREATE_UNIT' as RequestAction)) {
+                if (role !== 'COMMANDER') throw new Error('Vetëm Commander mundet me kriju njësi.');
+
+                if (!unitCode.trim() || !unitName.trim()) {
+                    throw new Error('Duhet me plotësu Code dhe Name për njësinë.');
+                }
+
+                const payload: any = {
+                    reason: reason.trim(),
+                    unit: {
+                        code: unitCode.trim(),
+                        name: unitName.trim(),
+                        parentId: parentUnitId.trim() || null,
+                    },
+                };
+
+                return createRequest({ personId: '', type: 'CREATE_UNIT' as any, payload });
+            }
+
             if (action === ('CREATE_USER' as RequestAction)) {
                 if (role !== 'COMMANDER') throw new Error('Vetëm Commander mundet me kriju kërkesë për përdorues.');
 
                 const email = newEmail.trim();
                 if (!isValidEmail(email)) throw new Error('Email nuk është në format të saktë.');
 
-                // ✅ validate contract dates if not neverExpires
                 if (!neverExpires) {
                     if (!contractFrom.trim() || !contractTo.trim()) {
                         throw new Error('Kur kontrata skadon, duhet me zgjedh Data fillimit dhe Data mbarimit.');
@@ -374,7 +403,7 @@ export default function Requests() {
                         username: newUsername.trim(),
                         email,
                         role: newRole,
-                        unitId: unitId || null, // zakonisht njësia e komandantit
+                        unitId: unitId || null,
                         contractValidFrom: neverExpires ? null : dateToISO(contractFrom),
                         contractValidTo: neverExpires ? null : dateToISO(contractTo),
                         neverExpires: !!neverExpires,
@@ -382,11 +411,9 @@ export default function Requests() {
                     },
                 };
 
-                // personId bosh për CREATE_USER
                 return createRequest({ personId: '', type: 'CREATE_USER' as any, payload });
             }
 
-            // ✅ request për person
             const base = {
                 personId: personId.trim(),
                 type: action as any,
@@ -436,7 +463,6 @@ export default function Requests() {
         },
 
         onSuccess: () => {
-            // reset person form
             setPersonId('');
             setPersonQuery('');
             setDebouncedQ('');
@@ -460,7 +486,6 @@ export default function Requests() {
                 notes: '',
             });
 
-            // reset user form
             setNewUsername('');
             setNewEmail('');
             setNewRole('OFFICER' as UserRole);
@@ -468,6 +493,10 @@ export default function Requests() {
             setContractTo('');
             setNeverExpires(true);
             setMustChangePassword(true);
+
+            setUnitCode('');
+            setUnitName('');
+            setParentUnitId('');
 
             qc.invalidateQueries({ queryKey: ['requests', 'my'] });
             qc.invalidateQueries({ queryKey: ['requests', 'incoming'] });
@@ -528,33 +557,333 @@ export default function Requests() {
 
     const canSend =
         !!reason.trim() &&
-        (action === ('CREATE_USER' as RequestAction)
-            ? role === 'COMMANDER' &&
-            !!newUsername.trim() &&
-            isValidEmail(newEmail) &&
-            !!String(newRole || '').trim() &&
-            (neverExpires ? true : !!contractFrom.trim() && !!contractTo.trim())
-            : !!personId.trim() &&
-            (action === 'TRANSFER_PERSON' || action === 'CHANGE_UNIT'
-                ? !!targetUnitId.trim()
-                : action === 'CHANGE_GRADE'
-                    ? !!targetGradeId.trim()
-                    : true));
+        (action === ('CREATE_UNIT' as RequestAction)
+            ? role === 'COMMANDER' && !!unitCode.trim() && !!unitName.trim()
+            : action === ('CREATE_USER' as RequestAction)
+                ? role === 'COMMANDER' &&
+                !!newUsername.trim() &&
+                isValidEmail(newEmail) &&
+                !!String(newRole || '').trim() &&
+                (neverExpires ? true : !!contractFrom.trim() && !!contractTo.trim())
+                : !!personId.trim() &&
+                (action === 'TRANSFER_PERSON' || action === 'CHANGE_UNIT'
+                    ? !!targetUnitId.trim()
+                    : action === 'CHANGE_GRADE'
+                        ? !!targetGradeId.trim()
+                        : true));
 
     const canCreateBox = view === 'ACTIVE' && (role === 'OPERATOR' || role === 'OFFICER' || role === 'COMMANDER');
+
+    const drawerPortal =
+        drawerOpen &&
+        createPortal(
+            <div
+                className="fixed inset-0 z-[9999]"
+                aria-modal="true"
+                role="dialog"
+            >
+                <div
+                    className="absolute inset-0 bg-black/50 backdrop-blur-[1px]"
+                    onMouseDown={closeDrawer}
+                />
+
+                <div className="absolute inset-0 flex justify-end overflow-hidden">
+                    <div
+                        onMouseDown={(e) => e.stopPropagation()}
+                        className="h-screen w-[min(560px,92vw)] bg-white border-l border-slate-200 shadow-2xl overflow-y-auto"
+                    >
+                        <div className="sticky top-0 z-10 bg-white border-b border-slate-200 px-4 py-3 flex items-center gap-3">
+                            <div className="font-semibold">Detaje të kërkesës</div>
+                            <div className="flex-1" />
+                            <button
+                                onClick={closeDrawer}
+                                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-700 hover:bg-slate-50 shadow-sm"
+                                title="Mbyll"
+                                aria-label="Mbyll"
+                            >
+                                <IconClose />
+                            </button>
+                        </div>
+
+                        <div className="p-4">
+                            {(() => {
+                                const it = selectedReq as any;
+                                if (!it) return null;
+
+                                const shownType = it.type ?? it.action;
+                                const labelType = ACTION_LABEL[shownType] || shownType;
+
+                                const shownReason = it.payload?.reason ?? it.reason ?? '';
+                                const fromUser = it.createdBy?.username ?? '—';
+                                const unitShown = it.targetUnitId?.name ?? it.unitId ?? '—';
+                                const status = it.status;
+                                const id = it.id ?? it._id;
+
+                                const shownPerson = it.personId?.serviceNo
+                                    ? `${it.personId.serviceNo} ${it.personId.firstName ?? ''} ${it.personId.lastName ?? ''}`.trim()
+                                    : String(it.personId ?? '');
+
+                                const createdAt = it.createdAt;
+                                const decidedAt = it.decidedAt ?? null;
+                                const decisionNote = it.decisionNote ?? '';
+
+                                const patchObj = shownType === 'UPDATE_PERSON' ? it?.payload?.meta?.patch ?? it?.payload?.patch ?? null : null;
+
+                                const canCommanderActions = tab === 'INCOMING' && (role === 'COMMANDER' || role === 'ADMIN' || role === 'AUDITOR');
+                                const canMyCancel = tab === 'MY';
+
+                                const canDownloadPdf = view === 'ARCHIVE' || status === 'APPROVED' || status === 'REJECTED' || status === 'CANCELLED';
+
+                                const isCreateUser = String(shownType) === 'CREATE_USER';
+                                const isCreateUnit = String(shownType) === 'CREATE_UNIT';
+                                const u = it?.payload?.user ?? null;
+                                const unitPayload = it?.payload?.unit ?? null;
+
+                                return (
+                                    <>
+                                        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                                            <div className="flex items-center gap-2">
+                                                <Badge tone={statusTone(status)}>{status}</Badge>
+                                                <div className="text-xs text-slate-500">ID: {String(id)}</div>
+                                            </div>
+
+                                            <div className="mt-3 font-semibold text-slate-900">{labelType}</div>
+
+                                            {!isCreateUser && !isCreateUnit ? (
+                                                <div className="mt-2 text-sm text-slate-700">
+                                                    <span className="text-slate-500">Person:</span> <b>{shownPerson}</b>
+                                                </div>
+                                            ) : isCreateUser ? (
+                                                <div className="mt-2 text-sm text-slate-700">
+                                                    <span className="text-slate-500">User:</span> <b>{u?.username ?? '—'}</b>
+                                                </div>
+                                            ) : (
+                                                <div className="mt-2 text-sm text-slate-700">
+                                                    <span className="text-slate-500">Njësia:</span> <b>{unitPayload?.code ?? '—'} {unitPayload?.name ? `• ${unitPayload.name}` : ''}</b>
+                                                </div>
+                                            )}
+
+                                            <div className="mt-2 text-sm text-slate-700">
+                                                <span className="text-slate-500">Nga:</span> <b>{fromUser}</b>
+                                                <span className="mx-2 text-slate-300">•</span>
+                                                <span className="text-slate-500">Unit:</span> <b>{unitShown}</b>
+                                            </div>
+
+                                            <div className="mt-2 text-xs text-slate-500">
+                                                Krijuar: {formatDateTime(createdAt)}
+                                                {decidedAt ? <div>Vendosur: {formatDateTime(decidedAt)}</div> : null}
+                                            </div>
+
+                                            {decisionNote && (status === 'REJECTED' || status === 'APPROVED' || status === 'CANCELLED') ? (
+                                                <div className="mt-3 text-sm text-slate-700">
+                                                    <div className="text-xs text-slate-500 mb-1">Vendimi</div>
+                                                    <div className="whitespace-pre-wrap">{decisionNote}</div>
+                                                </div>
+                                            ) : null}
+                                        </div>
+
+                                        <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                                            <div className="text-xs text-slate-500 mb-2">Arsyeja e kërkesës</div>
+                                            <div className="text-sm text-slate-700 whitespace-pre-wrap">{shownReason || '—'}</div>
+                                        </div>
+
+                                        {isCreateUser && u ? (
+                                            <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                                                <div className="text-xs text-slate-500 mb-2">Të dhënat e userit (kërkesë)</div>
+                                                <div className="text-sm text-slate-700 space-y-1">
+                                                    <div>
+                                                        <span className="text-slate-500">Email:</span> <b>{u.email ?? '—'}</b>
+                                                    </div>
+                                                    <div>
+                                                        <span className="text-slate-500">Roli:</span> <b>{u.role ?? '—'}</b>
+                                                    </div>
+                                                    <div>
+                                                        <span className="text-slate-500">Kontrata:</span>{' '}
+                                                        <b>{u.neverExpires ? 'Pa afat skadimi' : `${u.contractValidFrom ?? '—'} → ${u.contractValidTo ?? '—'}`}</b>
+                                                    </div>
+                                                    <div>
+                                                        <span className="text-slate-500">Must change password:</span> <b>{u.mustChangePassword ? 'Po' : 'Jo'}</b>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ) : null}
+
+                                        {isCreateUnit && unitPayload ? (
+                                            <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                                                <div className="text-xs text-slate-500 mb-2">Të dhënat e njësisë (kërkesë)</div>
+                                                <div className="text-sm text-slate-700 space-y-1">
+                                                    <div>
+                                                        <span className="text-slate-500">Code:</span> <b>{unitPayload.code ?? '—'}</b>
+                                                    </div>
+                                                    <div>
+                                                        <span className="text-slate-500">Name:</span> <b>{unitPayload.name ?? '—'}</b>
+                                                    </div>
+                                                    <div>
+                                                        <span className="text-slate-500">Parent Unit ID:</span> <b>{unitPayload.parentId ?? '—'}</b>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ) : null}
+
+                                        {patchObj ? (
+                                            <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                                                <div className="text-xs text-slate-500 mb-3">Ndryshimet e kërkuara</div>
+
+                                                {Object.keys(patchObj).length === 0 ? (
+                                                    <div className="text-sm text-slate-600">—</div>
+                                                ) : (
+                                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                                        {Object.entries(patchObj).map(([k, v]) => (
+                                                            <div key={k} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                                                                <div className="text-xs text-slate-500 mb-1">{k}</div>
+                                                                <div className="text-sm text-slate-700 whitespace-pre-wrap">
+                                                                    {isPrimitive(v) ? prettyValue(v) : prettyValue(v)}
+                                                                </div>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ) : null}
+
+                                        <div className="mt-4 flex flex-wrap gap-2">
+                                            <button
+                                                onClick={() => openRequestPdf(String(id), 'preview')}
+                                                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 shadow-sm"
+                                            >
+                                                <IconEye /> Preview PDF
+                                            </button>
+
+                                            <button
+                                                onClick={() => openRequestPdf(String(id), 'download')}
+                                                disabled={!canDownloadPdf}
+                                                className={cn(
+                                                    'inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-sm font-semibold shadow-sm',
+                                                    canDownloadPdf ? 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50' : 'border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed'
+                                                )}
+                                            >
+                                                <IconDownload /> Download PDF
+                                            </button>
+                                        </div>
+
+                                        {drawerError ? (
+                                            <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{drawerError}</div>
+                                        ) : null}
+
+                                        {canCommanderActions ? (
+                                            <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                                                <div className="font-semibold text-slate-900 mb-3">Veprime (Admin/Commander)</div>
+
+                                                <label className="block">
+                                                    <div className="text-xs font-medium text-slate-700 mb-1">Shënim për aprovim (opsional)</div>
+                                                    <textarea
+                                                        value={approveNote}
+                                                        onChange={(e) => setApproveNote(e.target.value)}
+                                                        rows={3}
+                                                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-300"
+                                                        placeholder="Shkruaj shënimin (nëse ke)…"
+                                                    />
+                                                </label>
+
+                                                <div className="mt-3">
+                                                    <button
+                                                        onClick={() => approveM.mutate({ id: String(id), note: approveNote.trim() })}
+                                                        disabled={approveM.isPending || status !== 'PENDING' || view === 'ARCHIVE'}
+                                                        className={cn(
+                                                            'rounded-xl px-4 py-2 text-sm font-semibold shadow-sm transition',
+                                                            status !== 'PENDING' || view === 'ARCHIVE'
+                                                                ? 'bg-slate-200 text-slate-500 cursor-not-allowed'
+                                                                : 'bg-emerald-600 text-white hover:bg-emerald-700'
+                                                        )}
+                                                    >
+                                                        {approveM.isPending ? 'Duke aprovuar…' : 'Aprovo'}
+                                                    </button>
+                                                </div>
+
+                                                <div className="h-4" />
+
+                                                <label className="block">
+                                                    <div className="text-xs font-medium text-slate-700 mb-1">Arsyeja e refuzimit (obligative)</div>
+                                                    <textarea
+                                                        value={rejectNote}
+                                                        onChange={(e) => setRejectNote(e.target.value)}
+                                                        rows={3}
+                                                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-300"
+                                                        placeholder="Shkruaj arsyen e refuzimit…"
+                                                    />
+                                                </label>
+
+                                                <div className="mt-3">
+                                                    <button
+                                                        onClick={() => {
+                                                            const n = rejectNote.trim();
+                                                            if (!n) return setDrawerError('Duhet me shkru arsyen e refuzimit.');
+                                                            rejectM.mutate({ id: String(id), note: n });
+                                                        }}
+                                                        disabled={rejectM.isPending || status !== 'PENDING' || view === 'ARCHIVE'}
+                                                        className={cn(
+                                                            'rounded-xl px-4 py-2 text-sm font-semibold shadow-sm transition',
+                                                            status !== 'PENDING' || view === 'ARCHIVE'
+                                                                ? 'bg-slate-200 text-slate-500 cursor-not-allowed'
+                                                                : 'bg-rose-600 text-white hover:bg-rose-700'
+                                                        )}
+                                                    >
+                                                        {rejectM.isPending ? 'Duke refuzuar…' : 'Refuzo'}
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        ) : canMyCancel ? (
+                                            <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                                                <div className="font-semibold text-slate-900 mb-3">Veprime (Anulo kërkesën)</div>
+
+                                                <label className="block">
+                                                    <div className="text-xs font-medium text-slate-700 mb-1">Shënim për anulim (opsional)</div>
+                                                    <textarea
+                                                        value={approveNote}
+                                                        onChange={(e) => setApproveNote(e.target.value)}
+                                                        rows={3}
+                                                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-300"
+                                                        placeholder="Shkruaj shënimin (nëse ke)…"
+                                                    />
+                                                </label>
+
+                                                <div className="mt-3">
+                                                    <button
+                                                        onClick={() => cancelM.mutate({ id: String(id), note: approveNote.trim() })}
+                                                        disabled={cancelM.isPending || view === 'ARCHIVE' || status !== 'PENDING'}
+                                                        className={cn(
+                                                            'rounded-xl px-4 py-2 text-sm font-semibold shadow-sm transition',
+                                                            status !== 'PENDING' || view === 'ARCHIVE'
+                                                                ? 'bg-slate-200 text-slate-500 cursor-not-allowed'
+                                                                : 'bg-slate-900 text-white hover:bg-slate-800'
+                                                        )}
+                                                    >
+                                                        {cancelM.isPending ? 'Duke anuluar…' : 'Anulo'}
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        ) : null}
+
+                                        <div className="h-6" />
+                                    </>
+                                );
+                            })()}
+                        </div>
+                    </div>
+                </div>
+            </div>,
+            document.body
+        );
 
     return (
         <div className="mx-auto max-w-6xl px-4 py-5 space-y-4">
             <div className="flex items-start justify-between gap-4">
                 <div>
                     <h1 className="text-2xl font-semibold tracking-tight">Kërkesat</h1>
-                    <p className="text-sm text-slate-600 mt-1">
-
-                    </p>
+                    <p className="text-sm text-slate-600 mt-1"></p>
                 </div>
             </div>
 
-            {/* Tabs + View */}
             <div className="flex flex-wrap items-center gap-2">
                 <div className="inline-flex rounded-xl border border-slate-200 bg-white p-1 shadow-sm">
                     <button
@@ -604,7 +933,6 @@ export default function Requests() {
                 </div>
             </div>
 
-            {/* Create */}
             {canCreateBox && (
                 <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
                     <div className="px-4 py-3 border-b border-slate-200">
@@ -613,7 +941,6 @@ export default function Requests() {
                     </div>
 
                     <div className="p-4 space-y-4">
-                        {/* Aksioni + Arsyeja */}
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                             <label className="space-y-1">
                                 <div className="text-xs font-medium text-slate-700">Aksioni</div>
@@ -623,8 +950,7 @@ export default function Requests() {
                                         const v = e.target.value as RequestAction;
                                         setAction(v);
 
-                                        // reset person picker kur kalon te CREATE_USER
-                                        if (v === ('CREATE_USER' as RequestAction)) {
+                                        if (v === ('CREATE_USER' as RequestAction) || v === ('CREATE_UNIT' as RequestAction)) {
                                             setPersonId('');
                                             setPersonQuery('');
                                             setSelectedLabel('');
@@ -653,7 +979,6 @@ export default function Requests() {
                             </label>
                         </div>
 
-                        {/* CREATE_USER (Commander only) */}
                         {action === ('CREATE_USER' as RequestAction) && role === 'COMMANDER' && (
                             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 space-y-3">
                                 <div className="font-semibold text-slate-900">Krijo përdorues (kërkesë për Admin)</div>
@@ -705,7 +1030,6 @@ export default function Requests() {
                                     </label>
                                 </div>
 
-                                {/* Kontrata */}
                                 <div className="rounded-xl border border-slate-200 bg-white p-3 space-y-3">
                                     <div className="flex items-center justify-between gap-3">
                                         <div className="font-semibold text-sm text-slate-900">Kontrata e vlefshmërisë</div>
@@ -775,10 +1099,46 @@ export default function Requests() {
                             </div>
                         )}
 
-                        {/* Person-requests (jo CREATE_USER) */}
-                        {action !== ('CREATE_USER' as RequestAction) && (
+                        {action === ('CREATE_UNIT' as RequestAction) && role === 'COMMANDER' && (
+                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 space-y-3">
+                                <div className="font-semibold text-slate-900">Krijo njësi (kërkesë për Admin)</div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                    <label className="space-y-1">
+                                        <div className="text-xs font-medium text-slate-700">Code</div>
+                                        <input
+                                            value={unitCode}
+                                            onChange={(e) => setUnitCode(e.target.value)}
+                                            placeholder="p.sh. BTN-001"
+                                            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-300"
+                                        />
+                                    </label>
+
+                                    <label className="space-y-1">
+                                        <div className="text-xs font-medium text-slate-700">Name</div>
+                                        <input
+                                            value={unitName}
+                                            onChange={(e) => setUnitName(e.target.value)}
+                                            placeholder="p.sh. Batalioni 1"
+                                            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-300"
+                                        />
+                                    </label>
+
+                                    <label className="space-y-1">
+                                        <div className="text-xs font-medium text-slate-700">Parent Unit ID (opsional)</div>
+                                        <input
+                                            value={parentUnitId}
+                                            onChange={(e) => setParentUnitId(e.target.value)}
+                                            placeholder="ObjectId i njësisë prind"
+                                            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-300"
+                                        />
+                                    </label>
+                                </div>
+                            </div>
+                        )}
+
+                        {action !== ('CREATE_USER' as RequestAction) && action !== ('CREATE_UNIT' as RequestAction) && (
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                {/* Person search */}
                                 <label className="relative space-y-1">
                                     <div className="text-xs font-medium text-slate-700">Ushtari (kërko me emër / serviceNo / numër personal)</div>
                                     <input
@@ -831,7 +1191,6 @@ export default function Requests() {
                                     <div className="text-xs text-slate-500">{personId ? '✅ Ushtari u zgjodh' : 'Zgjidh një ushtar nga lista.'}</div>
                                 </label>
 
-                                {/* extra inputs */}
                                 {(action === 'TRANSFER_PERSON' || action === 'CHANGE_UNIT') && (
                                     <label className="space-y-1">
                                         <div className="text-xs font-medium text-slate-700">toUnitId</div>
@@ -958,7 +1317,6 @@ export default function Requests() {
                 </div>
             )}
 
-            {/* List */}
             <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
                 <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between">
                     <div className="font-semibold">
@@ -977,16 +1335,21 @@ export default function Requests() {
                             const id = (it as any).id ?? (it as any)._id;
                             const status = (it as any).status;
 
-                            // person / user preview
                             const isCreateUser = String(shownType) === 'CREATE_USER';
+                            const isCreateUnit = String(shownType) === 'CREATE_UNIT';
                             const u = (it as any)?.payload?.user ?? null;
+                            const unitPayload = (it as any)?.payload?.unit ?? null;
 
                             const shownPerson =
                                 (it as any).personId?.serviceNo
                                     ? `${(it as any).personId.serviceNo} ${(it as any).personId.firstName ?? ''} ${(it as any).personId.lastName ?? ''}`.trim()
                                     : String((it as any).personId ?? '');
 
-                            const titleLeft = isCreateUser ? `CREATE_USER • ${u?.username ?? '—'}` : `${shownType} • Person: ${shownPerson}`;
+                            const titleLeft = isCreateUser
+                                ? `CREATE_USER • ${u?.username ?? '—'}`
+                                : isCreateUnit
+                                    ? `CREATE_UNIT • ${unitPayload?.code ?? '—'}${unitPayload?.name ? ` • ${unitPayload.name}` : ''}`
+                                    : `${shownType} • Person: ${shownPerson}`;
 
                             const fromUser = (it as any).createdBy?.username ?? '—';
                             const unitShown = (it as any).targetUnitId?.name ?? (it as any).unitId ?? '—';
@@ -1016,6 +1379,20 @@ export default function Requests() {
                                                 <div>
                                                     <span className="text-slate-500">Kontrata:</span>{' '}
                                                     <b>{u.neverExpires ? 'Pa afat skadimi' : `${u.contractValidFrom ?? '—'} → ${u.contractValidTo ?? '—'}`}</b>
+                                                </div>
+                                            </div>
+                                        ) : null}
+
+                                        {isCreateUnit && unitPayload ? (
+                                            <div className="mt-2 text-xs text-slate-600">
+                                                <div>
+                                                    <span className="text-slate-500">Code:</span> <b>{unitPayload.code ?? '—'}</b>
+                                                </div>
+                                                <div>
+                                                    <span className="text-slate-500">Name:</span> <b>{unitPayload.name ?? '—'}</b>
+                                                </div>
+                                                <div>
+                                                    <span className="text-slate-500">Parent Unit ID:</span> <b>{unitPayload.parentId ?? '—'}</b>
                                                 </div>
                                             </div>
                                         ) : null}
@@ -1080,278 +1457,7 @@ export default function Requests() {
                 )}
             </div>
 
-            {/* Drawer */}
-            {drawerOpen && (
-                <div
-                    onMouseDown={(e) => {
-                        if (e.target === e.currentTarget) closeDrawer();
-                    }}
-                    className="fixed inset-0 z-[999] bg-black/50 flex justify-end"
-                >
-                    <div className="h-full w-[min(560px,92vw)] bg-white border-l border-slate-200 shadow-2xl overflow-y-auto">
-                        {/* header */}
-                        <div className="sticky top-0 z-10 bg-white border-b border-slate-200 px-4 py-3 flex items-center gap-3">
-                            <div className="font-semibold">Detaje të kërkesës</div>
-                            <div className="flex-1" />
-                            <button
-                                onClick={closeDrawer}
-                                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-700 hover:bg-slate-50 shadow-sm"
-                                title="Mbyll"
-                                aria-label="Mbyll"
-                            >
-                                <IconClose />
-                            </button>
-                        </div>
-
-                        {/* body */}
-                        <div className="p-4">
-                            {(() => {
-                                const it = selectedReq as any;
-                                if (!it) return null;
-
-                                const shownType = it.type ?? it.action;
-                                const labelType = ACTION_LABEL[shownType] || shownType;
-
-                                const shownReason = it.payload?.reason ?? it.reason ?? '';
-                                const fromUser = it.createdBy?.username ?? '—';
-                                const unitShown = it.targetUnitId?.name ?? it.unitId ?? '—';
-                                const status = it.status;
-                                const id = it.id ?? it._id;
-
-                                const shownPerson = it.personId?.serviceNo
-                                    ? `${it.personId.serviceNo} ${it.personId.firstName ?? ''} ${it.personId.lastName ?? ''}`.trim()
-                                    : String(it.personId ?? '');
-
-                                const createdAt = it.createdAt;
-                                const decidedAt = it.decidedAt ?? null;
-                                const decisionNote = it.decisionNote ?? '';
-
-                                const patchObj = shownType === 'UPDATE_PERSON' ? it?.payload?.meta?.patch ?? it?.payload?.patch ?? null : null;
-
-                                // ✅ Admini edhe Commander i kanë actions në INCOMING
-                                const canCommanderActions = tab === 'INCOMING' && (role === 'COMMANDER' || role === 'ADMIN' || role === 'AUDITOR');
-                                const canMyCancel = tab === 'MY';
-
-                                const canDownloadPdf = view === 'ARCHIVE' || status === 'APPROVED' || status === 'REJECTED' || status === 'CANCELLED';
-
-                                const isCreateUser = String(shownType) === 'CREATE_USER';
-                                const u = it?.payload?.user ?? null;
-
-                                return (
-                                    <>
-                                        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                                            <div className="flex items-center gap-2">
-                                                <Badge tone={statusTone(status)}>{status}</Badge>
-                                                <div className="text-xs text-slate-500">ID: {String(id)}</div>
-                                            </div>
-
-                                            <div className="mt-3 font-semibold text-slate-900">{labelType}</div>
-
-                                            {!isCreateUser ? (
-                                                <div className="mt-2 text-sm text-slate-700">
-                                                    <span className="text-slate-500">Person:</span> <b>{shownPerson}</b>
-                                                </div>
-                                            ) : (
-                                                <div className="mt-2 text-sm text-slate-700">
-                                                    <span className="text-slate-500">User:</span> <b>{u?.username ?? '—'}</b>
-                                                </div>
-                                            )}
-
-                                            <div className="mt-2 text-sm text-slate-700">
-                                                <span className="text-slate-500">Nga:</span> <b>{fromUser}</b>
-                                                <span className="mx-2 text-slate-300">•</span>
-                                                <span className="text-slate-500">Unit:</span> <b>{unitShown}</b>
-                                            </div>
-
-                                            <div className="mt-2 text-xs text-slate-500">
-                                                Krijuar: {formatDateTime(createdAt)}
-                                                {decidedAt ? <div>Vendosur: {formatDateTime(decidedAt)}</div> : null}
-                                            </div>
-
-                                            {decisionNote && (status === 'REJECTED' || status === 'APPROVED' || status === 'CANCELLED') ? (
-                                                <div className="mt-3 text-sm text-slate-700">
-                                                    <div className="text-xs text-slate-500 mb-1">Vendimi</div>
-                                                    <div className="whitespace-pre-wrap">{decisionNote}</div>
-                                                </div>
-                                            ) : null}
-                                        </div>
-
-                                        <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                                            <div className="text-xs text-slate-500 mb-2">Arsyeja e kërkesës</div>
-                                            <div className="text-sm text-slate-700 whitespace-pre-wrap">{shownReason || '—'}</div>
-                                        </div>
-
-                                        {isCreateUser && u ? (
-                                            <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                                                <div className="text-xs text-slate-500 mb-2">Të dhënat e userit (kërkesë)</div>
-                                                <div className="text-sm text-slate-700 space-y-1">
-                                                    <div>
-                                                        <span className="text-slate-500">Email:</span> <b>{u.email ?? '—'}</b>
-                                                    </div>
-                                                    <div>
-                                                        <span className="text-slate-500">Roli:</span> <b>{u.role ?? '—'}</b>
-                                                    </div>
-                                                    <div>
-                                                        <span className="text-slate-500">Kontrata:</span>{' '}
-                                                        <b>{u.neverExpires ? 'Pa afat skadimi' : `${u.contractValidFrom ?? '—'} → ${u.contractValidTo ?? '—'}`}</b>
-                                                    </div>
-                                                    <div>
-                                                        <span className="text-slate-500">Must change password:</span> <b>{u.mustChangePassword ? 'Po' : 'Jo'}</b>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        ) : null}
-
-                                        {patchObj ? (
-                                            <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                                                <div className="text-xs text-slate-500 mb-3">Ndryshimet e kërkuara</div>
-
-                                                {Object.keys(patchObj).length === 0 ? (
-                                                    <div className="text-sm text-slate-600">—</div>
-                                                ) : (
-                                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                                        {Object.entries(patchObj).map(([k, v]) => (
-                                                            <div key={k} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                                                                <div className="text-xs text-slate-500 mb-1">{k}</div>
-                                                                <div className="text-sm text-slate-700 whitespace-pre-wrap">
-                                                                    {isPrimitive(v) ? prettyValue(v) : prettyValue(v)}
-                                                                </div>
-                                                            </div>
-                                                        ))}
-                                                    </div>
-                                                )}
-                                            </div>
-                                        ) : null}
-
-                                        {/* PDF actions */}
-                                        <div className="mt-4 flex flex-wrap gap-2">
-                                            <button
-                                                onClick={() => openRequestPdf(String(id), 'preview')}
-                                                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 shadow-sm"
-                                            >
-                                                <IconEye /> Preview PDF
-                                            </button>
-
-                                            <button
-                                                onClick={() => openRequestPdf(String(id), 'download')}
-                                                disabled={!canDownloadPdf}
-                                                className={cn(
-                                                    'inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-sm font-semibold shadow-sm',
-                                                    canDownloadPdf ? 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50' : 'border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed'
-                                                )}
-                                            >
-                                                <IconDownload /> Download PDF
-                                            </button>
-                                        </div>
-
-                                        {/* Errors */}
-                                        {drawerError ? (
-                                            <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{drawerError}</div>
-                                        ) : null}
-
-                                        {/* Decision actions */}
-                                        {canCommanderActions ? (
-                                            <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                                                <div className="font-semibold text-slate-900 mb-3">Veprime (Admin/Commander)</div>
-
-                                                <label className="block">
-                                                    <div className="text-xs font-medium text-slate-700 mb-1">Shënim për aprovim (opsional)</div>
-                                                    <textarea
-                                                        value={approveNote}
-                                                        onChange={(e) => setApproveNote(e.target.value)}
-                                                        rows={3}
-                                                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-300"
-                                                        placeholder="Shkruaj shënimin (nëse ke)…"
-                                                    />
-                                                </label>
-
-                                                <div className="mt-3">
-                                                    <button
-                                                        onClick={() => approveM.mutate({ id: String(id), note: approveNote.trim() })}
-                                                        disabled={approveM.isPending || status !== 'PENDING' || view === 'ARCHIVE'}
-                                                        className={cn(
-                                                            'rounded-xl px-4 py-2 text-sm font-semibold shadow-sm transition',
-                                                            status !== 'PENDING' || view === 'ARCHIVE'
-                                                                ? 'bg-slate-200 text-slate-500 cursor-not-allowed'
-                                                                : 'bg-emerald-600 text-white hover:bg-emerald-700'
-                                                        )}
-                                                    >
-                                                        {approveM.isPending ? 'Duke aprovuar…' : 'Aprovo'}
-                                                    </button>
-                                                </div>
-
-                                                <div className="h-4" />
-
-                                                <label className="block">
-                                                    <div className="text-xs font-medium text-slate-700 mb-1">Arsyeja e refuzimit (obligative)</div>
-                                                    <textarea
-                                                        value={rejectNote}
-                                                        onChange={(e) => setRejectNote(e.target.value)}
-                                                        rows={3}
-                                                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-300"
-                                                        placeholder="Shkruaj arsyen e refuzimit…"
-                                                    />
-                                                </label>
-
-                                                <div className="mt-3">
-                                                    <button
-                                                        onClick={() => {
-                                                            const n = rejectNote.trim();
-                                                            if (!n) return setDrawerError('Duhet me shkru arsyen e refuzimit.');
-                                                            rejectM.mutate({ id: String(id), note: n });
-                                                        }}
-                                                        disabled={rejectM.isPending || status !== 'PENDING' || view === 'ARCHIVE'}
-                                                        className={cn(
-                                                            'rounded-xl px-4 py-2 text-sm font-semibold shadow-sm transition',
-                                                            status !== 'PENDING' || view === 'ARCHIVE'
-                                                                ? 'bg-slate-200 text-slate-500 cursor-not-allowed'
-                                                                : 'bg-rose-600 text-white hover:bg-rose-700'
-                                                        )}
-                                                    >
-                                                        {rejectM.isPending ? 'Duke refuzuar…' : 'Refuzo'}
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        ) : canMyCancel ? (
-                                            <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                                                <div className="font-semibold text-slate-900 mb-3">Veprime (Anulo kërkesën)</div>
-
-                                                <label className="block">
-                                                    <div className="text-xs font-medium text-slate-700 mb-1">Shënim për anulim (opsional)</div>
-                                                    <textarea
-                                                        value={approveNote}
-                                                        onChange={(e) => setApproveNote(e.target.value)}
-                                                        rows={3}
-                                                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-300"
-                                                        placeholder="Shkruaj shënimin (nëse ke)…"
-                                                    />
-                                                </label>
-
-                                                <div className="mt-3">
-                                                    <button
-                                                        onClick={() => cancelM.mutate({ id: String(id), note: approveNote.trim() })}
-                                                        disabled={cancelM.isPending || view === 'ARCHIVE' || status !== 'PENDING'}
-                                                        className={cn(
-                                                            'rounded-xl px-4 py-2 text-sm font-semibold shadow-sm transition',
-                                                            status !== 'PENDING' || view === 'ARCHIVE'
-                                                                ? 'bg-slate-200 text-slate-500 cursor-not-allowed'
-                                                                : 'bg-slate-900 text-white hover:bg-slate-800'
-                                                        )}
-                                                    >
-                                                        {cancelM.isPending ? 'Duke anuluar…' : 'Anulo'}
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        ) : null}
-
-                                        <div className="h-6" />
-                                    </>
-                                );
-                            })()}
-                        </div>
-                    </div>
-                </div>
-            )}
+            {drawerPortal}
         </div>
     );
 }

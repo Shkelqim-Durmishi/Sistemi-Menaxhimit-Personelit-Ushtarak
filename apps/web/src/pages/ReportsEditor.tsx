@@ -13,7 +13,7 @@ import {
   exportUrl,
   getUpcomingLeave,
   getCurrentUser,
-  listReports, // ✅ SHTUAR
+  listReports,
 } from '../lib/api';
 
 import {
@@ -58,6 +58,13 @@ type ReportListItem = {
   _id: string;
   date: string;
   unitId: string;
+  unit?: {
+    id: string;
+    code?: string;
+    name?: string;
+  } | null;
+  unitName?: string;
+  unitCode?: string;
   status: ReportStatus;
   createdAt?: string;
   updatedAt?: string;
@@ -71,30 +78,19 @@ function fmtShortDate(iso?: string) {
   return `${d}-${m}-${y}`;
 }
 
-/**
- * Bllokon DRAFT:
- * - nëse raporti është i ditëve të kaluara
- * - ose nëse raporti është sot dhe ora është >= cutoff (default 16:00)
- *
- * NOTE: përdor kohën lokale të browser-it.
- */
 function isAfterCutoff(reportDateISO: string, cutoffHour = 16, cutoffMinute = 0) {
   const now = new Date();
 
-  // reportDateISO pritet "YYYY-MM-DD"
-  const reportDate = new Date(reportDateISO + 'T00:00:00'); // lokal
+  const reportDate = new Date(reportDateISO + 'T00:00:00');
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
-  // Ditë e kaluar
   if (reportDate < today) return true;
 
-  // Sot
   if (reportDate.getTime() === today.getTime()) {
     const cutoff = new Date(now.getFullYear(), now.getMonth(), now.getDate(), cutoffHour, cutoffMinute, 0, 0);
     return now >= cutoff;
   }
 
-  // Ditë e ardhshme -> mos e blloko nga koha
   return false;
 }
 
@@ -164,6 +160,10 @@ function DisabledWrap({
   );
 }
 
+function getUnitDisplay(it: ReportListItem) {
+  return it.unitName || it.unit?.name || it.unitCode || it.unit?.code || String(it.unitId || '—');
+}
+
 export default function ReportsEditor() {
   const currentUser = getCurrentUser();
   const isAdmin = currentUser?.role === 'ADMIN';
@@ -176,14 +176,12 @@ export default function ReportsEditor() {
   const [reportId, setReportId] = useState<string | null>(null);
   const [status, setStatus] = useState<ReportStatus | null>(null);
 
-  // ===== TIME LOCK (16:00) =====
-  // Për me rifresku automatikisht lock-un kur bie ora 16:00, përdorim "nowTick".
   const [nowTick, setNowTick] = useState(() => Date.now());
   useEffect(() => {
-    const t = window.setInterval(() => setNowTick(Date.now()), 30_000); // çdo 30s
+    const t = window.setInterval(() => setNowTick(Date.now()), 30_000);
     return () => window.clearInterval(t);
   }, []);
-  void nowTick; // vetëm që të re-render-ojë (përdoret indirekt)
+  void nowTick;
 
   const timeLocked = status === 'DRAFT' && isAfterCutoff(date, 16, 0);
   const statusLocked = status === 'PENDING' || status === 'APPROVED';
@@ -191,7 +189,6 @@ export default function ReportsEditor() {
 
   const [cats, setCats] = useState<Cat[]>([]);
 
-  // Search UI state
   const [q, setQ] = useState('');
   const [people, setPeople] = useState<Person[]>([]);
   const [page, setPage] = useState(1);
@@ -227,7 +224,6 @@ export default function ReportsEditor() {
     getCategories().then(setCats).catch(() => setCats([]));
   }, []);
 
-  // close dropdown on outside click + ESC
   useEffect(() => {
     function onDoc(e: MouseEvent) {
       if (!boxRef.current) return;
@@ -244,7 +240,6 @@ export default function ReportsEditor() {
     };
   }, []);
 
-  // Debounced search
   useEffect(() => {
     let active = true;
 
@@ -280,7 +275,6 @@ export default function ReportsEditor() {
     };
   }, [q]);
 
-  // upcoming leave when emergency + person selected
   useEffect(() => {
     let active = true;
 
@@ -398,7 +392,6 @@ export default function ReportsEditor() {
       const row = await addRow(reportId, payload);
       setRows((prev) => [row as Row, ...prev]);
 
-      // reset fields
       setSelectedPerson(null);
       setSelectedCat('');
       setQ('');
@@ -432,12 +425,11 @@ export default function ReportsEditor() {
     setRows((prev) => prev.map((r) => (r._id === row._id ? (updated as any) : r)));
   }
 
-  // ======== HISTORIKU (TAB) ========
   const [histLoading, setHistLoading] = useState(false);
   const [histError, setHistError] = useState<string>('');
   const [histItems, setHistItems] = useState<ReportListItem[]>([]);
   const [histStatus, setHistStatus] = useState<'ALL' | ReportStatus>('ALL');
-  const [histSearch, setHistSearch] = useState(''); // date or id
+  const [histSearch, setHistSearch] = useState('');
   const [histOnlyMyUnit, setHistOnlyMyUnit] = useState(true);
 
   async function fetchHistory() {
@@ -447,7 +439,6 @@ export default function ReportsEditor() {
     try {
       const params: any = {};
 
-      // Admin: lejo me zgjedh unit-in manual; jo-admin: backend vet e filtrin
       if (isAdmin) {
         if (histOnlyMyUnit && currentUser?.unitId) {
           params.unit = String(currentUser.unitId);
@@ -463,7 +454,6 @@ export default function ReportsEditor() {
           ? (data as any).items
           : [];
 
-      // sort newest first (by date)
       list.sort((a, b) => String(b.date).localeCompare(String(a.date)));
 
       setHistItems(list);
@@ -478,7 +468,6 @@ export default function ReportsEditor() {
 
   useEffect(() => {
     if (activeTab === 'history') fetchHistory();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
 
   const filteredHistory = useMemo(() => {
@@ -491,8 +480,10 @@ export default function ReportsEditor() {
       x = x.filter((r) => {
         const id = String(r._id).toLowerCase();
         const d = String(r.date).slice(0, 10).toLowerCase();
-        const u = String(r.unitId).toLowerCase();
-        return id.includes(term) || d.includes(term) || u.includes(term);
+        const uId = String(r.unitId).toLowerCase();
+        const uName = String(r.unitName || r.unit?.name || '').toLowerCase();
+        const uCode = String(r.unitCode || r.unit?.code || '').toLowerCase();
+        return id.includes(term) || d.includes(term) || uId.includes(term) || uName.includes(term) || uCode.includes(term);
       });
     }
 
@@ -510,7 +501,6 @@ export default function ReportsEditor() {
     return c;
   }, [histItems]);
 
-  // Tooltip reasons
   const addDisabled = isLocked || !reportId || !selectedPerson || !selectedCat || busyAdd;
   const addReason = isLocked
     ? timeLocked
@@ -549,7 +539,6 @@ export default function ReportsEditor() {
 
   return (
     <div className="space-y-5">
-      {/* TITLE + Tabs */}
       <div className="flex flex-col gap-3">
         <div className="flex items-center justify-between gap-3">
           <h1 className="text-2xl font-semibold tracking-tight text-gray-900">Raport Ditor</h1>
@@ -583,10 +572,8 @@ export default function ReportsEditor() {
         </div>
       </div>
 
-      {/* ===== TAB: HISTORIKU ===== */}
       {activeTab === 'history' ? (
         <div className="space-y-4">
-          {/* Filters */}
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
             <div className="flex flex-col lg:flex-row lg:items-end gap-3">
               <div className="flex-1">
@@ -596,7 +583,7 @@ export default function ReportsEditor() {
                   <input
                     value={histSearch}
                     onChange={(e) => setHistSearch(e.target.value)}
-                    placeholder="p.sh. 2026-02-12 ose RPT..."
+                    placeholder="p.sh. 2026-02-12 ose Batalioni I"
                     className="w-full pl-10 pr-10 py-2 rounded-xl border border-gray-200 bg-white text-sm text-gray-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-[#C9A24D]/40"
                   />
                   {histSearch && (
@@ -650,7 +637,6 @@ export default function ReportsEditor() {
               </button>
             </div>
 
-            {/* quick counts */}
             <div className="mt-3 grid sm:grid-cols-5 gap-2">
               <div className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-2">
                 <div className="text-[11px] uppercase tracking-wider text-gray-500">Total</div>
@@ -679,7 +665,6 @@ export default function ReportsEditor() {
             </div>
           </div>
 
-          {/* Table */}
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
             <div className="px-4 py-3 border-b bg-white flex items-center justify-between">
               <div className="font-semibold text-gray-900">Historiku i raporteve</div>
@@ -711,11 +696,12 @@ export default function ReportsEditor() {
                     {filteredHistory.map((it) => {
                       const itDate = String(it.date).slice(0, 10);
                       const itDraftLocked = it.status === 'DRAFT' && isAfterCutoff(itDate, 16, 0);
+                      const unitDisplay = getUnitDisplay(it);
 
                       return (
                         <tr key={it._id} className="hover:bg-gray-50/60">
                           <td className="py-3 px-4 font-mono text-gray-900">{itDate}</td>
-                          <td className="py-3 px-4 text-gray-700">{String(it.unitId)}</td>
+                          <td className="py-3 px-4 text-gray-700">{unitDisplay}</td>
                           <td className="py-3 px-4">
                             <StatusPill status={it.status} />
                           </td>
@@ -732,7 +718,7 @@ export default function ReportsEditor() {
                                   onClick={async () => {
                                     setReportId(it._id);
                                     await hydrate(it._id);
-                                    setDate(itDate); // sinkronizo datën e editor-it me item-in
+                                    setDate(itDate);
                                     setActiveTab('editor');
                                   }}
                                   className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-sm font-semibold text-white bg-gray-900 hover:bg-black shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
@@ -764,10 +750,8 @@ export default function ReportsEditor() {
         </div>
       ) : null}
 
-      {/* ===== TAB: EDITOR ===== */}
       {activeTab === 'editor' ? (
         <>
-          {/* Header card */}
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
             <div className="grid lg:grid-cols-12 gap-3 items-end">
               <div className="lg:col-span-3">
@@ -883,7 +867,6 @@ export default function ReportsEditor() {
             ) : null}
           </div>
 
-          {/* Add row card */}
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
             <div className="flex items-center justify-between mb-3">
               <div className="font-semibold text-gray-900">Shto rresht</div>
@@ -901,7 +884,6 @@ export default function ReportsEditor() {
             </div>
 
             <div className="grid lg:grid-cols-12 gap-3">
-              {/* Search person */}
               <div className="lg:col-span-4">
                 <label className="text-xs font-semibold text-gray-600">Kërko personin</label>
 
@@ -1006,7 +988,6 @@ export default function ReportsEditor() {
                 </div>
               </div>
 
-              {/* Category */}
               <div className="lg:col-span-3">
                 <label className="text-xs font-semibold text-gray-600">Kategoria</label>
                 <select
@@ -1031,7 +1012,6 @@ export default function ReportsEditor() {
                 ) : null}
               </div>
 
-              {/* From / To */}
               <div className="lg:col-span-2">
                 <label className="text-xs font-semibold text-gray-600">Nga</label>
                 <input
@@ -1054,7 +1034,6 @@ export default function ReportsEditor() {
                 />
               </div>
 
-              {/* Add button */}
               <div className="lg:col-span-1 flex items-end">
                 <DisabledWrap disabled={addDisabled} reason={addReason}>
                   <button
@@ -1074,7 +1053,6 @@ export default function ReportsEditor() {
                 </DisabledWrap>
               </div>
 
-              {/* Location */}
               <div className="lg:col-span-4">
                 <label className="text-xs font-semibold text-gray-600">Vend</label>
                 <input
@@ -1086,7 +1064,6 @@ export default function ReportsEditor() {
                 />
               </div>
 
-              {/* Notes */}
               <div className="lg:col-span-8">
                 <label className="text-xs font-semibold text-gray-600">Shënime</label>
                 <input
@@ -1098,7 +1075,6 @@ export default function ReportsEditor() {
                 />
               </div>
 
-              {/* Emergency section */}
               <div className="lg:col-span-12">
                 <div className="mt-2 grid sm:grid-cols-3 gap-3 items-center rounded-2xl border border-gray-100 bg-gray-50/60 p-3">
                   <label className="flex items-center gap-2 text-sm text-gray-800">
@@ -1163,7 +1139,6 @@ export default function ReportsEditor() {
             </div>
           </div>
 
-          {/* Rows table */}
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
             <div className="px-4 py-3 border-b bg-white flex items-center justify-between">
               <div className="font-semibold text-gray-900">Rreshtat</div>

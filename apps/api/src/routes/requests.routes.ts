@@ -26,7 +26,7 @@ const r = Router();
 const isValidObjectId = (id: unknown) => typeof id === 'string' && Types.ObjectId.isValid(id);
 
 /**
- * ✅ Shtuam CREATE_USER
+ * ✅ Shtuam CREATE_USER + CREATE_UNIT
  */
 const allowedTypes = [
     'DELETE_PERSON',
@@ -36,6 +36,7 @@ const allowedTypes = [
     'DEACTIVATE_PERSON',
     'UPDATE_PERSON',
     'CREATE_USER',
+    'CREATE_UNIT',
 ] as const;
 
 type AllowedType = (typeof allowedTypes)[number];
@@ -120,6 +121,8 @@ function requestTypeLabel(t: string) {
             return 'Përditësim të dhënash';
         case 'CREATE_USER':
             return 'Krijim përdoruesi';
+        case 'CREATE_UNIT':
+            return 'Krijim njësie';
         default:
             return t;
     }
@@ -290,7 +293,9 @@ function writeDecisionLine(doc: PDFKit.PDFDocument, decisionWord: 'APROVOHET' | 
  *  - /uploads/... (relative to project root)
  *  - absolute path
  */
-function resolveSignatureSource(signatureImageUrl?: string | null): { kind: 'buffer'; data: Buffer } | { kind: 'path'; data: string } | null {
+function resolveSignatureSource(
+    signatureImageUrl?: string | null
+): { kind: 'buffer'; data: Buffer } | { kind: 'path'; data: string } | null {
     const s = String(signatureImageUrl ?? '').trim();
     if (!s) return null;
 
@@ -306,13 +311,11 @@ function resolveSignatureSource(signatureImageUrl?: string | null): { kind: 'buf
         }
     }
 
-    // local path like /uploads/...
     let p = s;
     if (p.startsWith('/')) {
         p = path.join(process.cwd(), p.replace(/^\//, ''));
     }
 
-    // allow relative file path too
     if (!path.isAbsolute(p)) {
         p = path.join(process.cwd(), p);
     }
@@ -327,7 +330,6 @@ function drawSignatureImage(
     box: { x: number; y: number; w: number; h: number }
 ) {
     try {
-        // PDFKit: use "fit" to keep proportions
         if (sig.kind === 'buffer') {
             doc.image(sig.data, box.x, box.y, { fit: [box.w, box.h], align: 'center', valign: 'center' } as any);
         } else {
@@ -396,6 +398,7 @@ async function generateRequestPdf(opts: {
             : await getUnitName(reqDoc?.targetUnitId);
 
     const newGrade = safeText(reqDoc?.payload?.newGradeId);
+    const requestedUnit = reqDoc?.payload?.unit ?? null;
 
     await new Promise<void>((resolve, reject) => {
         const doc = new PDFDocument({
@@ -415,23 +418,89 @@ async function generateRequestPdf(opts: {
         });
 
         doc.font('Times-Roman').fontSize(11).fillColor('#111');
-        doc.text(`Personi: ${personLine}`);
+
+        if (reqDoc.type === 'CREATE_UNIT') {
+            const code = safeText(requestedUnit?.code);
+            const name = safeText(requestedUnit?.name);
+            const parentLabel =
+                safeText(requestedUnit?.parentName) ||
+                    safeText(requestedUnit?.parentCode)
+                    ? `${safeText(requestedUnit?.parentCode) ? safeText(requestedUnit?.parentCode) + ' — ' : ''}${safeText(
+                        requestedUnit?.parentName
+                    )}`.trim()
+                    : '—';
+
+            doc.text(`Njësia e kërkuar: ${code ? code + ' — ' : ''}${name}`.trim());
+            doc.text(`Njësia prind: ${parentLabel}`);
+        } else if (reqDoc.type === 'CREATE_USER') {
+            const u = reqDoc?.payload?.user ?? {};
+            doc.text(`Përdoruesi: ${safeText(u?.username) || '—'}`);
+            doc.text(`Roli: ${safeText(u?.role) || '—'}`);
+            doc.text(`Email: ${safeText(u?.email) || '—'}`);
+        } else {
+            doc.text(`Personi: ${personLine}`);
+        }
+
         doc.text(`Lloji i kërkesës: ${requestTypeLabel(String(reqDoc.type))}`);
         doc.moveDown(0.8);
 
         if (status === 'APPROVED') {
-            writeDecisionLine(
-                doc,
-                'APROVOHET',
-                `kërkesa për "${requestTypeLabel(String(reqDoc.type))}" për personin e lartcekur, dhe urdhërohet zbatimi nga njësia përkatëse.`
-            );
+            if (reqDoc.type === 'CREATE_UNIT') {
+                writeDecisionLine(
+                    doc,
+                    'APROVOHET',
+                    `kërkesa për krijimin e njësisë së re dhe urdhërohet regjistrimi i saj në sistem.`
+                );
+            } else if (reqDoc.type === 'CREATE_USER') {
+                writeDecisionLine(
+                    doc,
+                    'APROVOHET',
+                    `kërkesa për krijimin e përdoruesit të ri dhe urdhërohet regjistrimi i tij në sistem.`
+                );
+            } else {
+                writeDecisionLine(
+                    doc,
+                    'APROVOHET',
+                    `kërkesa për "${requestTypeLabel(String(reqDoc.type))}" për personin e lartcekur, dhe urdhërohet zbatimi nga njësia përkatëse.`
+                );
+            }
         } else if (status === 'REJECTED') {
-            writeDecisionLine(doc, 'REFUZOHET', `kërkesa për "${requestTypeLabel(String(reqDoc.type))}" për personin e lartcekur.`);
+            if (reqDoc.type === 'CREATE_UNIT') {
+                writeDecisionLine(doc, 'REFUZOHET', `kërkesa për krijimin e njësisë së re.`);
+            } else if (reqDoc.type === 'CREATE_USER') {
+                writeDecisionLine(doc, 'REFUZOHET', `kërkesa për krijimin e përdoruesit të ri.`);
+            } else {
+                writeDecisionLine(doc, 'REFUZOHET', `kërkesa për "${requestTypeLabel(String(reqDoc.type))}" për personin e lartcekur.`);
+            }
         }
 
         if (status === 'PENDING' && reason) {
             doc.font('Times-Bold').fontSize(11).text('Arsyeja:');
             doc.font('Times-Roman').fontSize(11).text(reason, { align: 'justify', lineGap: 3 });
+            doc.moveDown(0.8);
+        }
+
+        if (reqDoc.type === 'CREATE_UNIT') {
+            doc.font('Times-Bold').fontSize(11).text('Detaje:');
+            doc.font('Times-Roman').fontSize(11);
+            doc.text(`Kodi i njësisë: ${safeText(requestedUnit?.code) || '—'}`);
+            doc.text(`Emri i njësisë: ${safeText(requestedUnit?.name) || '—'}`);
+            doc.text(
+                `Parent ID: ${requestedUnit?.parentId
+                    ? String(requestedUnit.parentId)
+                    : '—'
+                }`
+            );
+            doc.moveDown(0.8);
+        }
+
+        if (reqDoc.type === 'CREATE_USER') {
+            const u = reqDoc?.payload?.user ?? {};
+            doc.font('Times-Bold').fontSize(11).text('Detaje:');
+            doc.font('Times-Roman').fontSize(11);
+            doc.text(`Username: ${safeText(u?.username) || '—'}`);
+            doc.text(`Email: ${safeText(u?.email) || '—'}`);
+            doc.text(`Roli: ${safeText(u?.role) || '—'}`);
             doc.moveDown(0.8);
         }
 
@@ -484,7 +553,6 @@ async function generateRequestPdf(opts: {
             doc.moveDown(0.8);
         }
 
-        // Footer signatures
         const marginL = 60;
         const marginR = 60;
         const pageW = doc.page.width;
@@ -501,7 +569,6 @@ async function generateRequestPdf(opts: {
         const rightLineStartX = rightLineEndX - rightLineWidth;
         const lineY = footerTopY;
 
-        // draw signature images ABOVE the line (so it looks like real signing)
         const sigBoxH = 38;
         const sigBoxY = lineY - sigBoxH - 6;
 
@@ -509,13 +576,11 @@ async function generateRequestPdf(opts: {
             drawSignatureImage(doc, createdSigSrc, { x: leftX, y: sigBoxY, w: leftLineWidth, h: sigBoxH });
         }
 
-        // only show decided signature if there is a decidedBy and status is final
         const showDecidedSig = (status === 'APPROVED' || status === 'REJECTED') && safeText((decidedBy as any)?.username);
         if (showDecidedSig && decidedSigSrc) {
             drawSignatureImage(doc, decidedSigSrc, { x: rightLineStartX, y: sigBoxY, w: rightLineWidth, h: sigBoxH });
         }
 
-        // lines
         doc.save();
         doc.strokeColor('#9aa0a6').lineWidth(1);
         doc.moveTo(leftX, lineY).lineTo(leftX + leftLineWidth, lineY).stroke();
@@ -584,7 +649,6 @@ r.post('/', requireAuth, requireRole('OPERATOR', 'OFFICER', 'ADMIN', 'COMMANDER'
     const me = req.user as AuthUserPayload;
 
     try {
-        // ✅ enforce signature for creating requests (optional policy)
         await requireMeHasSignature(me);
     } catch (e: any) {
         if (e?.code === 'SIGNATURE_REQUIRED') {
@@ -625,7 +689,6 @@ r.post('/', requireAuth, requireRole('OPERATOR', 'OFFICER', 'ADMIN', 'COMMANDER'
             });
         }
 
-        // targetUnitId: zakonisht unit i komandantit; admin mundet me e lon null
         const targetUnitId = me.unitId ? new Types.ObjectId(me.unitId) : null;
 
         const doc = await ChangeRequest.create({
@@ -636,6 +699,7 @@ r.post('/', requireAuth, requireRole('OPERATOR', 'OFFICER', 'ADMIN', 'COMMANDER'
             createdByUnitId: me.unitId ? new Types.ObjectId(me.unitId) : null,
             personId: null,
             targetUnitId,
+            targetRole: 'ADMIN',
             payload: {
                 reason: p.reason ?? '',
                 user: {
@@ -647,6 +711,87 @@ r.post('/', requireAuth, requireRole('OPERATOR', 'OFFICER', 'ADMIN', 'COMMANDER'
                     contractValidTo: u?.contractValidTo ?? null,
                     neverExpires: u?.neverExpires !== undefined ? !!u.neverExpires : true,
                     mustChangePassword: u?.mustChangePassword !== undefined ? !!u.mustChangePassword : true,
+                },
+            },
+            docNo: '',
+            pdf: { path: '', generatedAt: null },
+        });
+
+        const out = await ChangeRequest.findById(doc._id)
+            .populate('targetUnitId', 'code name')
+            .populate('createdBy', 'username role unitId signatureImageUrl')
+            .lean();
+
+        return res.status(201).json(out);
+    }
+
+    /**
+     * ✅ CREATE_UNIT: nuk kërkon personId
+     * - lejo vetëm COMMANDER ose ADMIN
+     * - kërkesa i shkon ADMIN-it
+     */
+    if (String(type) === 'CREATE_UNIT') {
+        if (me.role !== 'COMMANDER' && me.role !== 'ADMIN') {
+            return res.status(403).json({ code: 'FORBIDDEN', message: 'Only COMMANDER/ADMIN can create CREATE_UNIT requests' });
+        }
+
+        const u = p?.unit ?? {};
+        const code = String(u?.code ?? '').trim();
+        const name = String(u?.name ?? '').trim();
+        const parentIdRaw = u?.parentId ? String(u.parentId).trim() : '';
+
+        if (!code || !name) {
+            return res.status(400).json({
+                code: 'VALIDATION_ERROR',
+                message: 'payload.unit.code and payload.unit.name required',
+            });
+        }
+
+        if (parentIdRaw && !Types.ObjectId.isValid(parentIdRaw)) {
+            return res.status(400).json({
+                code: 'VALIDATION_ERROR',
+                message: 'payload.unit.parentId invalid',
+            });
+        }
+
+        const existsCode = await Unit.findOne({ code }).select('_id').lean();
+        if (existsCode) {
+            return res.status(409).json({
+                code: 'UNIT_CODE_EXISTS',
+                message: 'Një njësi me këtë kod ekziston tashmë.',
+            });
+        }
+
+        let parentUnit: any = null;
+        if (parentIdRaw) {
+            parentUnit = await Unit.findById(parentIdRaw).select('_id code name').lean();
+            if (!parentUnit) {
+                return res.status(400).json({
+                    code: 'VALIDATION_ERROR',
+                    message: 'payload.unit.parentId invalid',
+                });
+            }
+        }
+
+        const targetUnitId = me.unitId ? new Types.ObjectId(me.unitId) : null;
+
+        const doc = await ChangeRequest.create({
+            type: 'CREATE_UNIT',
+            status: 'PENDING',
+            createdBy: new Types.ObjectId(me.id),
+            createdByRole: me.role,
+            createdByUnitId: me.unitId ? new Types.ObjectId(me.unitId) : null,
+            personId: null,
+            targetUnitId,
+            targetRole: 'ADMIN',
+            payload: {
+                reason: p.reason ?? '',
+                unit: {
+                    code,
+                    name,
+                    parentId: parentIdRaw || null,
+                    parentCode: parentUnit?.code ?? '',
+                    parentName: parentUnit?.name ?? '',
                 },
             },
             docNo: '',
@@ -758,7 +903,7 @@ r.post('/', requireAuth, requireRole('OPERATOR', 'OFFICER', 'ADMIN', 'COMMANDER'
    GET /api/requests/my
    ========================================= */
 
-r.get('/my', requireAuth, requireRole('OPERATOR', 'OFFICER', 'ADMIN', 'AUDITOR'), async (req: any, res) => {
+r.get('/my', requireAuth, requireRole('OPERATOR', 'OFFICER', 'ADMIN', 'AUDITOR', 'COMMANDER'), async (req: any, res) => {
     const me = req.user as AuthUserPayload;
 
     const page = Math.max(parseInt(req.query.page as string) || 1, 1);
@@ -885,7 +1030,6 @@ r.get('/:id/pdf', requireAuth, requireRole('COMMANDER', 'ADMIN', 'AUDITOR', 'OFF
     const ok = await canAccessRequest(me, doc);
     if (!ok) return res.status(403).json({ code: 'FORBIDDEN' });
 
-    // regenerate when missing OR refresh=true
     if (!doc?.pdf?.path || refresh) {
         const fresh: any = await ChangeRequest.findById(req.params.id)
             .populate('personId', 'serviceNo firstName lastName unitId gradeId status')
@@ -930,7 +1074,6 @@ r.post('/:id/approve', requireAuth, requireRole('COMMANDER', 'ADMIN'), async (re
     const me = req.user as AuthUserPayload;
     const { note } = req.body ?? {};
 
-    // ✅ require signature for approver
     try {
         await requireMeHasSignature(me);
     } catch (e: any) {
@@ -955,7 +1098,7 @@ r.post('/:id/approve', requireAuth, requireRole('COMMANDER', 'ADMIN'), async (re
     }
 
     /**
-     * ✅ CREATE_USER: e krijon realisht user-in + dërgon email (ADMIN)
+     * ✅ CREATE_USER
      */
     if (doc.type === 'CREATE_USER') {
         if (me.role !== 'ADMIN') {
@@ -985,7 +1128,6 @@ r.post('/:id/approve', requireAuth, requireRole('COMMANDER', 'ADMIN'), async (re
             return res.status(409).json({ code: 'USER_EXISTS', message: 'Username already exists' });
         }
 
-        // ✅ gjenero password të përkohshëm + hash
         const tempPassword = crypto.randomBytes(9).toString('base64url');
         const passwordHash = await bcrypt.hash(tempPassword, 10);
 
@@ -993,7 +1135,6 @@ r.post('/:id/approve', requireAuth, requireRole('COMMANDER', 'ADMIN'), async (re
         const contractValidFrom = u?.contractValidFrom ? new Date(u.contractValidFrom) : null;
         const contractValidTo = u?.contractValidTo ? new Date(u.contractValidTo) : null;
 
-        // ✅ krijo user-in
         const createdUser = await User.create({
             username,
             passwordHash,
@@ -1005,7 +1146,6 @@ r.post('/:id/approve', requireAuth, requireRole('COMMANDER', 'ADMIN'), async (re
             contractValidTo: neverExpires ? null : contractValidTo,
         });
 
-        // ✅ shëno request si approved
         doc.status = 'APPROVED';
         doc.decidedBy = new Types.ObjectId(me.id);
         doc.decidedAt = new Date();
@@ -1017,7 +1157,6 @@ r.post('/:id/approve', requireAuth, requireRole('COMMANDER', 'ADMIN'), async (re
 
         await doc.save();
 
-        // ✅ gjej label të njësisë (opsionale për email)
         let unitLabel: string | undefined = undefined;
         try {
             const uid = unitIdRaw ? new Types.ObjectId(String(unitIdRaw)) : null;
@@ -1031,7 +1170,6 @@ r.post('/:id/approve', requireAuth, requireRole('COMMANDER', 'ADMIN'), async (re
             }
         } catch { }
 
-        // ✅ dërgo email (mos e blloko flow nëse dështon)
         let emailSent = false;
         try {
             await sendNewUserCredentials({
@@ -1047,7 +1185,6 @@ r.post('/:id/approve', requireAuth, requireRole('COMMANDER', 'ADMIN'), async (re
             emailSent = false;
         }
 
-        // ✅ regenerate PDF now that decision exists (with signatures)
         const fullForPdf = await ChangeRequest.findById(doc._id)
             .populate('targetUnitId', 'code name')
             .populate('createdBy', 'username role unitId signatureImageUrl')
@@ -1066,7 +1203,6 @@ r.post('/:id/approve', requireAuth, requireRole('COMMANDER', 'ADMIN'), async (re
             .populate('decidedBy', 'username role signatureImageUrl')
             .lean();
 
-        // ✅ DEV helper (mundesh me e hjek në PROD)
         return res.json({
             ...out,
             emailSent,
@@ -1074,7 +1210,100 @@ r.post('/:id/approve', requireAuth, requireRole('COMMANDER', 'ADMIN'), async (re
         });
     }
 
-    // --------- Person flows (siç i kishe) ---------
+    /**
+     * ✅ CREATE_UNIT
+     */
+    if (doc.type === 'CREATE_UNIT') {
+        if (me.role !== 'ADMIN') {
+            return res.status(403).json({ code: 'FORBIDDEN', message: 'Only ADMIN can approve CREATE_UNIT' });
+        }
+
+        const u = doc.payload?.unit ?? {};
+        const code = String(u?.code ?? '').trim();
+        const name = String(u?.name ?? '').trim();
+        const parentIdRaw = u?.parentId ? String(u.parentId).trim() : '';
+
+        if (!code || !name) {
+            return res.status(400).json({
+                code: 'VALIDATION_ERROR',
+                message: 'payload.unit.code and payload.unit.name required',
+            });
+        }
+
+        if (parentIdRaw && !Types.ObjectId.isValid(parentIdRaw)) {
+            return res.status(400).json({
+                code: 'VALIDATION_ERROR',
+                message: 'payload.unit.parentId invalid',
+            });
+        }
+
+        const existsCode = await Unit.findOne({ code }).select('_id').lean();
+        if (existsCode) {
+            return res.status(409).json({
+                code: 'UNIT_CODE_EXISTS',
+                message: 'Një njësi me këtë kod ekziston tashmë.',
+            });
+        }
+
+        let parentUnitId: Types.ObjectId | null = null;
+        if (parentIdRaw) {
+            const parentUnit = await Unit.findById(parentIdRaw).select('_id').lean();
+            if (!parentUnit) {
+                return res.status(400).json({
+                    code: 'VALIDATION_ERROR',
+                    message: 'payload.unit.parentId invalid',
+                });
+            }
+            parentUnitId = new Types.ObjectId(parentIdRaw);
+        }
+
+        const createdUnit = await Unit.create({
+            code,
+            name,
+            parentId: parentUnitId,
+        });
+
+        doc.status = 'APPROVED';
+        doc.decidedBy = new Types.ObjectId(me.id);
+        doc.decidedAt = new Date();
+        doc.decisionNote = note ?? '';
+
+        doc.payload = doc.payload || {};
+        doc.payload.meta = doc.payload.meta || {};
+        doc.payload.meta.createdUnitId = createdUnit._id;
+
+        await doc.save();
+
+        const fullForPdf = await ChangeRequest.findById(doc._id)
+            .populate('targetUnitId', 'code name')
+            .populate('createdBy', 'username role unitId signatureImageUrl')
+            .populate('decidedBy', 'username role signatureImageUrl')
+            .lean();
+
+        const gen = await generateRequestPdf({ reqDoc: fullForPdf });
+
+        doc.docNo = gen.docNo;
+        doc.pdf = { path: gen.publicPath, generatedAt: new Date() };
+        await doc.save();
+
+        const out = await ChangeRequest.findById(doc._id)
+            .populate('targetUnitId', 'code name')
+            .populate('createdBy', 'username role unitId signatureImageUrl')
+            .populate('decidedBy', 'username role signatureImageUrl')
+            .lean();
+
+        return res.json({
+            ...out,
+            createdUnit: {
+                _id: createdUnit._id,
+                code: createdUnit.code,
+                name: createdUnit.name,
+                parentId: createdUnit.parentId ?? null,
+            },
+        });
+    }
+
+    // --------- Person flows ---------
 
     const personBefore: any = await Person.findById(doc.personId).lean();
     if (!personBefore && doc.type !== 'DELETE_PERSON') return res.status(404).json({ code: 'PERSON_NOT_FOUND' });
@@ -1180,7 +1409,6 @@ r.post('/:id/reject', requireAuth, requireRole('COMMANDER', 'ADMIN'), async (req
     const me = req.user as AuthUserPayload;
     const { note } = req.body ?? {};
 
-    // ✅ require signature for rejector
     try {
         await requireMeHasSignature(me);
     } catch (e: any) {
@@ -1208,7 +1436,7 @@ r.post('/:id/reject', requireAuth, requireRole('COMMANDER', 'ADMIN'), async (req
         if (!unitIds.includes(String(doc.targetUnitId))) return res.status(403).json({ code: 'FORBIDDEN' });
     }
 
-    const personBefore: any = await Person.findById(doc.personId).lean();
+    const personBefore: any = doc.personId ? await Person.findById(doc.personId).lean() : null;
 
     doc.status = 'REJECTED';
     doc.decidedBy = new Types.ObjectId(me.id);
@@ -1248,7 +1476,7 @@ r.post('/:id/reject', requireAuth, requireRole('COMMANDER', 'ADMIN'), async (req
    POST /api/requests/:id/cancel
    ========================================= */
 
-r.post('/:id/cancel', requireAuth, requireRole('OPERATOR', 'OFFICER', 'ADMIN'), async (req: any, res) => {
+r.post('/:id/cancel', requireAuth, requireRole('OPERATOR', 'OFFICER', 'ADMIN', 'COMMANDER'), async (req: any, res) => {
     const me = req.user as AuthUserPayload;
     const { note } = req.body ?? {};
 

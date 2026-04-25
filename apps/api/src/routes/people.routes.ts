@@ -10,6 +10,7 @@ import crypto from 'node:crypto';
 import Person from '../models/Person';
 import Justification from '../models/Justification';
 import Category from '../models/Category';
+import Unit from '../models/Unit';
 
 import { requireAuth, requireRole } from '../middleware/auth';
 
@@ -23,11 +24,6 @@ function sameUnit(user: any, unitId: any) {
   return String(user.unitId) === String(unitId);
 }
 
-/**
- * ✅ Kush ka të drejtë me pa arsyen e refuzimit?
- * - ADMIN / COMMANDER: po
- * - OPERATOR: vetëm nëse ai e ka kriju ushtarin (createdBy === user.id)
- */
 function canSeeRejectionReason(user: any, person: any) {
   if (!user || !person) return false;
   if (user.role === 'ADMIN' || user.role === 'COMMANDER') return true;
@@ -35,9 +31,6 @@ function canSeeRejectionReason(user: any, person: any) {
   return false;
 }
 
-/**
- * ✅ Fshih fushat sensitive (rejectionReason etj) kur s’ka leje
- */
 function sanitizePersonForUser(user: any, person: any) {
   if (!person) return person;
 
@@ -50,6 +43,34 @@ function sanitizePersonForUser(user: any, person: any) {
   }
 
   return person;
+}
+
+function normalizeUnitRef(unitRef: any): { id: string; code?: string; name?: string } | null {
+  if (!unitRef) return null;
+
+  if (typeof unitRef === 'object') {
+    return {
+      id: String(unitRef._id ?? unitRef.id ?? ''),
+      code: unitRef.code,
+      name: unitRef.name,
+    };
+  }
+
+  return {
+    id: String(unitRef),
+  };
+}
+
+function withUnitFields(person: any) {
+  const u = normalizeUnitRef(person?.unitId);
+
+  return {
+    ...person,
+    unitId: u ? u.id : person?.unitId,
+    unit: u,
+    unitName: u?.name ?? '',
+    unitCode: u?.code ?? '',
+  };
 }
 
 /**
@@ -73,7 +94,6 @@ async function savePersonPhotoFromDataUrl(dataUrl: string, serviceNo: string) {
     throw err;
   }
 
-  // max 2MB
   const maxBytes = 2 * 1024 * 1024;
   if (buf.length > maxBytes) {
     const err: any = new Error('PHOTO_TOO_LARGE');
@@ -96,7 +116,6 @@ async function savePersonPhotoFromDataUrl(dataUrl: string, serviceNo: string) {
 
   await fs.writeFile(filePath, buf);
 
-  // URL që do ta shërbejë express static: /uploads/people/<file>
   return `/uploads/people/${name}`;
 }
 
@@ -134,11 +153,16 @@ r.get(
     }
 
     const [rawItems, total] = await Promise.all([
-      Person.find(filter).sort({ serviceNo: 1 }).skip((page - 1) * limit).limit(limit).lean(),
+      Person.find(filter)
+        .populate('unitId', '_id code name')
+        .sort({ serviceNo: 1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean(),
       Person.countDocuments(filter),
     ]);
 
-    const items = rawItems.map((p: any) => sanitizePersonForUser(user, p));
+    const items = rawItems.map((p: any) => withUnitFields(sanitizePersonForUser(user, p)));
     res.json({ items, page, limit, total, pages: Math.ceil(total / limit) });
   }
 );
@@ -158,14 +182,19 @@ r.get(
       return res.status(400).json({ code: 'INVALID_ID' });
     }
 
-    const person: any = await Person.findById(id).lean();
+    const person: any = await Person.findById(id)
+      .populate('unitId', '_id code name')
+      .lean();
+
     if (!person) return res.status(404).json({ code: 'PERSON_NOT_FOUND' });
 
-    if (!sameUnit(user, person.unitId)) {
+    const personUnitId = person?.unitId?._id ?? person?.unitId;
+
+    if (!sameUnit(user, personUnitId)) {
       return res.status(403).json({ code: 'FORBIDDEN_UNIT' });
     }
 
-    return res.json(sanitizePersonForUser(user, person));
+    return res.json(withUnitFields(sanitizePersonForUser(user, person)));
   }
 );
 
@@ -269,7 +298,11 @@ r.post(
         createdBy: user.id,
       });
 
-      return res.status(201).json(person);
+      const created = await Person.findById((person as any)._id)
+        .populate('unitId', '_id code name')
+        .lean();
+
+      return res.status(201).json(withUnitFields(created));
     } catch (err: any) {
       console.error('CREATE PERSON ERROR', err);
 
@@ -296,9 +329,7 @@ r.post(
 );
 
 /* ==================================================
-   ✅ UPDATE PERSON (PUT /:id)  <-- KJO MUNGONTE
-   - OPERATOR: vetëm krijuesi (createdBy) dhe vetëm brenda njësisë së vet
-   - ADMIN: lejohet
+   UPDATE PERSON (PUT /:id)
    ================================================== */
 r.put(
   '/:id',
@@ -319,7 +350,6 @@ r.put(
       return res.status(403).json({ code: 'FORBIDDEN_UNIT' });
     }
 
-    // ✅ vetëm krijuesi (operatori) ose admini
     if (user.role !== 'ADMIN' && String(person.createdBy) !== String(user.id)) {
       return res.status(403).json({ code: 'FORBIDDEN_UPDATE' });
     }
@@ -342,7 +372,6 @@ r.put(
       photoUrl,
     } = req.body ?? {};
 
-    // (opsionale) validim minimal – sepse ti po e dërgon krejt formën nga frontend
     const missing: string[] = [];
     if (!serviceNo) missing.push('serviceNo');
     if (!firstName) missing.push('firstName');
@@ -365,7 +394,6 @@ r.put(
       });
     }
 
-    // jo-admin: mos lejo me ndërru unitId në njësi tjetër
     if (user.role !== 'ADMIN') {
       if (!user.unitId) return res.status(403).json({ code: 'NO_UNIT_ASSIGNED' });
       if (String(user.unitId) !== String(unitId)) {
@@ -377,11 +405,9 @@ r.put(
       const sNo = String(serviceNo).trim();
       const pn = String(personalNumber).trim();
 
-      // unik: serviceNo
       const existsService = await Person.findOne({ serviceNo: sNo, _id: { $ne: person._id } }).lean();
       if (existsService) return res.status(409).json({ code: 'SERVICE_NO_EXISTS' });
 
-      // unik: personalNumber
       const existsPn = await Person.findOne({ personalNumber: pn, _id: { $ne: person._id } }).lean();
       if (existsPn) return res.status(409).json({ code: 'PERSONAL_NUMBER_EXISTS' });
 
@@ -402,7 +428,6 @@ r.put(
 
       person.notes = typeof notes === 'string' && notes.trim() ? notes.trim() : null;
 
-      // 📸 foto
       if (typeof photoUrl === 'string' && photoUrl.startsWith('data:image/')) {
         const storedPhotoUrl = await savePersonPhotoFromDataUrl(photoUrl, sNo);
         person.photoUrl = storedPhotoUrl || null;
@@ -414,8 +439,11 @@ r.put(
 
       await person.save();
 
-      const out = person.toObject ? person.toObject() : person;
-      return res.json(sanitizePersonForUser(user, out));
+      const out = await Person.findById(person._id)
+        .populate('unitId', '_id code name')
+        .lean();
+
+      return res.json(withUnitFields(sanitizePersonForUser(user, out)));
     } catch (err: any) {
       console.error('UPDATE PERSON ERROR', err);
 
@@ -467,7 +495,12 @@ r.post(
     person.rejectionReason = undefined;
 
     await person.save();
-    res.json(person);
+
+    const out = await Person.findById(person._id)
+      .populate('unitId', '_id code name')
+      .lean();
+
+    res.json(withUnitFields(out));
   }
 );
 
@@ -508,14 +541,16 @@ r.post(
 
     await person.save();
 
-    res.json(sanitizePersonForUser(user, person.toObject ? person.toObject() : person));
+    const out = await Person.findById(person._id)
+      .populate('unitId', '_id code name')
+      .lean();
+
+    res.json(withUnitFields(sanitizePersonForUser(user, out)));
   }
 );
 
 /* ==================================================
-   RESUBMIT (OPERATOR/ADMIN)
-   - PATCH /:id/resubmit  (origjinali)
-   - POST  /:id/resubmit  (alias për frontend-in tënd)
+   RESUBMIT
    ================================================== */
 async function resubmitHandler(req: any, res: any) {
   const user: any = (req as any).user;
@@ -593,8 +628,11 @@ async function resubmitHandler(req: any, res: any) {
 
     await person.save();
 
-    const out = person.toObject ? person.toObject() : person;
-    return res.json(sanitizePersonForUser(user, out));
+    const out = await Person.findById(person._id)
+      .populate('unitId', '_id code name')
+      .lean();
+
+    return res.json(withUnitFields(sanitizePersonForUser(user, out)));
   } catch (err: any) {
     console.error('RESUBMIT PERSON ERROR', err);
 
@@ -617,7 +655,6 @@ r.patch(
   resubmitHandler
 );
 
-// ✅ alias për frontend-in tënd (që po përdor POST)
 r.post(
   '/:id/resubmit',
   requireAuth,
@@ -647,8 +684,9 @@ r.get(
       return res.status(403).json({ code: 'FORBIDDEN_UNIT' });
     }
 
-    const now = new Date();
-    const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+    const today = new Date();
+
+    const tomorrow = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
 
     const leaveCats = await Category.find({ code: { $in: ['01-12', '01-13'] } })
       .select('_id code label')

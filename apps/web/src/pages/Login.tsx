@@ -119,7 +119,7 @@ export default function Login() {
                                         className={`${inputBase} border-red-300 focus:border-[#C9A24D]`}
                                         autoComplete="username"
                                     />
-                                    <label className={floatingLabel}>Username</label>
+                                    <label className={floatingLabel}>Përdoruesi</label>
                                 </div>
 
                                 {/* Password */}
@@ -133,7 +133,7 @@ export default function Login() {
                                         className={`${inputBase} border-gray-300 focus:border-[#2F3E2E]`}
                                         autoComplete="current-password"
                                     />
-                                    <label className={floatingLabel}>Password</label>
+                                    <label className={floatingLabel}>Fjalëkalimi</label>
                                 </div>
 
                                 <button
@@ -147,7 +147,7 @@ export default function Login() {
                     disabled:opacity-60
                   "
                                 >
-                                    {loading ? 'Duke u futur…' : 'Login'}
+                                    {loading ? 'Duke u futur…' : 'Hyrje'}
                                 </button>
                             </form>
                         ) : (

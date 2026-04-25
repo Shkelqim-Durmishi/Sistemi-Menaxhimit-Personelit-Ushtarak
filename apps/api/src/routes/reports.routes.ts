@@ -40,13 +40,27 @@ async function getUnitBrief(unitId: any): Promise<{ id: string; code?: string; n
   }
 }
 
+function normalizeUnitRef(unitRef: any): { id: string; code?: string; name?: string } | null {
+  if (!unitRef) return null;
+
+  if (typeof unitRef === 'object') {
+    return {
+      id: String(unitRef._id ?? unitRef.id ?? ''),
+      code: unitRef.code,
+      name: unitRef.name,
+    };
+  }
+
+  return {
+    id: String(unitRef),
+  };
+}
+
 async function resolveUnitId(unit: string) {
   if (!unit) return undefined;
 
-  // nëse është ObjectId, ktheje direkt
   if (isObjectId(unit)) return unit;
 
-  // nëse është code, gjeje Unit-in
   const u = await Unit.findOne({ code: unit }).select('_id').lean();
   return u?._id?.toString();
 }
@@ -60,7 +74,6 @@ function sameUnit(user: any, repUnitId: any): boolean {
 
 /* ============ rregullat kohore ============ */
 
-// orari zyrtar: s’lejohen dorëzime/editime PAS orës 16:00 për RAPORTIN E SOTËM
 function isAfterCutoff(): boolean {
   const now = new Date();
   const cutoff = new Date(now);
@@ -80,10 +93,9 @@ function todayDateOnly() {
 async function needsPeriod(categoryId: string) {
   const c = await Category.findById(categoryId).lean();
   if (!c) return false;
-  return ['01-12', '01-13'].includes((c as any).code); // Pushim Vjetor / Pushim Mjekësor
+  return ['01-12', '01-13'].includes((c as any).code);
 }
 
-// Lock + kontroll i njësisë
 async function ensureReportEditable(reportId: string, user: any) {
   const rep = await DailyReport.findById(reportId).lean();
   if (!rep) return { ok: false, code: 404 as const, msg: 'NOT_FOUND' };
@@ -140,11 +152,6 @@ function drawOuterFrame(doc: PDFKit.PDFDocument, margin: number) {
   doc.restore();
 }
 
-/**
- * IMPORTANT:
- * pdfkit e ndryshon doc.y pas doc.text().
- * Këtu e vizatojmë tekstin pa e prish doc.y (restore).
- */
 function drawTextFixed(
   doc: PDFKit.PDFDocument,
   text: string,
@@ -196,7 +203,6 @@ function drawBox(
   doc.restore();
 }
 
-/** Logo i qendruar REAL brenda katrorit */
 function drawImageCenteredInBox(
   doc: PDFKit.PDFDocument,
   imagePath: string,
@@ -244,7 +250,6 @@ function drawTopHeaderMock(
 
   drawBox(doc, x0, y0, w0, headerH, { stroke: '#111' });
 
-  // logo box majtas
   const logoBox = { x: x0 + 14, y: y0 + 14, w: 70, h: 62 };
   drawBox(doc, logoBox.x, logoBox.y, logoBox.w, logoBox.h, { stroke: '#111' });
 
@@ -254,14 +259,12 @@ function drawTopHeaderMock(
     drawTextFixed(doc, 'LOGO', logoBox.x, logoBox.y, logoBox.w, logoBox.h, { align: 'center', bold: true, size: 10 });
   }
 
-  // titulli + meta djathtas
   const tx = logoBox.x + logoBox.w + 16;
   const tw = x0 + w0 - 14 - tx;
 
   drawTextFixed(doc, title, tx, y0 + 18, tw, 26, { align: 'left', bold: true, size: 18 });
   drawTextFixed(doc, metaLine, tx, y0 + 48, tw, 20, { align: 'left', size: 10 });
 
-  // vijë poshtë header-it
   doc.save();
   doc.strokeColor('#111').lineWidth(1);
   doc.moveTo(x0, y0 + headerH).lineTo(x0 + w0, y0 + headerH).stroke();
@@ -432,14 +435,12 @@ r.get(
       if (uid) q.unitId = uid;
     }
 
-    // ✅ populate unitId -> Unit, dhe kthe edhe unit: {id,code,name}
     const itemsRaw = await DailyReport.find(q)
       .sort({ date: -1 })
       .limit(100)
       .populate('unitId', '_id code name')
       .lean();
 
-    // ✅ nëse filtron me personId, e bëjmë mbi listën e filtruar
     let items = itemsRaw;
 
     if (personId && isObjectId(String(personId))) {
@@ -449,16 +450,15 @@ r.get(
       items = items.filter((i) => set.has(String((i as any)._id)));
     }
 
-    // ✅ normalizo output: unitId mbetet, por shtojmë unit për UI
     const out = items.map((it: any) => {
-      const u = it.unitId && typeof it.unitId === 'object'
-        ? { id: String(it.unitId._id), code: it.unitId.code, name: it.unitId.name }
-        : null;
+      const u = normalizeUnitRef(it.unitId);
 
       return {
         ...it,
         unitId: u ? u.id : it.unitId,
-        unit: u, // ✅ frontend shfaq unit.code/name
+        unit: u,
+        unitName: u?.name ?? '',
+        unitCode: u?.code ?? '',
       };
     });
 
@@ -495,11 +495,13 @@ r.post(
         createdBy: user?.id ?? null,
       });
 
-      // ✅ kthe edhe unit brief
       const unitBrief = await getUnitBrief(uid);
       return res.status(201).json({
         ...(item.toObject ? item.toObject() : item),
+        unitId: unitBrief ? unitBrief.id : uid,
         unit: unitBrief,
+        unitName: unitBrief?.name ?? '',
+        unitCode: unitBrief?.code ?? '',
       });
     } catch (e: any) {
       if (e.code === 11000) return res.status(409).json({ code: 'CONFLICT', message: 'Report exists' });
@@ -517,14 +519,12 @@ r.get(
   async (req, res) => {
     const user: any = (req as any).user;
 
-    // ✅ populate unitId
     const item = await DailyReport.findById(req.params.id)
       .populate('unitId', '_id code name')
       .lean();
 
     if (!item) return res.status(404).json({ code: 'NOT_FOUND' });
 
-    // item.unitId mund të jetë objekt (populated)
     const unitIdRaw = (item as any).unitId?._id ?? (item as any).unitId;
 
     if (!sameUnit(user, unitIdRaw)) {
@@ -536,14 +536,14 @@ r.get(
       .populate('categoryId', 'code label')
       .lean();
 
-    const uObj = (item as any).unitId && typeof (item as any).unitId === 'object'
-      ? { id: String((item as any).unitId._id), code: (item as any).unitId.code, name: (item as any).unitId.name }
-      : null;
+    const uObj = normalizeUnitRef((item as any).unitId);
 
     return res.json({
       ...item,
       unitId: uObj ? uObj.id : (item as any).unitId,
       unit: uObj,
+      unitName: uObj?.name ?? '',
+      unitCode: uObj?.code ?? '',
       rows,
     });
   }
@@ -782,7 +782,7 @@ async function getReportWithRows(id: string) {
   return { rep, rows };
 }
 
-/* ============ Export PDF (UPDATE: logo center + cards inset + E column visible) ============ */
+/* ============ Export PDF ============ */
 
 r.get(
   '/:id/export/pdf',
@@ -824,7 +824,7 @@ r.get(
     doc.pipe(res);
 
     const frameMargin = 36;
-    const innerPaddingFromFrame = 14; // ✅ çdo element mos me u ngjit te borderi kryesor
+    const innerPaddingFromFrame = 14;
     const contentMargin = frameMargin + innerPaddingFromFrame;
 
     const logos = getLogos();
@@ -832,7 +832,6 @@ r.get(
     const title = 'Raport Ditor';
     const metaLine = `Data: ${reportDate}   •   Njësia: ${unitLabel}   •   Status: ${status}`;
 
-    // ✅ e rrisim pak kolonën E, dhe e ngushtojmë pak “Shënime” që mos me humb
     const cols: TableCol[] = [
       { key: 'idx', header: '#', baseW: 28, align: 'center' },
       { key: 'sn', header: 'Nr. Shërbimit', baseW: 92 },
@@ -841,8 +840,8 @@ r.get(
       { key: 'from', header: 'Nga', baseW: 70, align: 'center' },
       { key: 'to', header: 'Deri', baseW: 70, align: 'center' },
       { key: 'loc', header: 'Vend', baseW: 88 },
-      { key: 'notes', header: 'Shënime', baseW: 84 }, // pak ma ngusht
-      { key: 'emg', header: 'E', baseW: 40, align: 'center' }, // ✅ ma e gjerë, shihet mirë
+      { key: 'notes', header: 'Shënime', baseW: 84 },
+      { key: 'emg', header: 'E', baseW: 40, align: 'center' },
     ];
 
     const contentW = doc.page.width - contentMargin * 2;
